@@ -9,7 +9,6 @@ import MarkdownContent from '../MarkdownContent';
 import {
   CheckIcon,
   InformationCircleIcon,
-  PuzzlePieceIcon,
   EllipsisHorizontalIcon,
   PencilSquareIcon,
   ShareIcon,
@@ -22,6 +21,7 @@ import { FolderIcon } from '@heroicons/react/24/solid';
 import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
+import PuzzleIcon from '../icons/PuzzleIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { getCompactFolderName } from '../../utils/path';
 
@@ -863,7 +863,7 @@ const UserMessageItem: React.FC<{ message: CoworkMessage; skills: Skill[] }> = (
                     className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-claude-accent/5 dark:bg-claude-accent/10"
                     title={skill.description}
                   >
-                    <PuzzlePieceIcon className="h-2.5 w-2.5 text-claude-accent/70" />
+                    <PuzzleIcon className="h-2.5 w-2.5 text-claude-accent/70" />
                     <span className="text-[10px] font-medium text-claude-accent/70 max-w-[60px] truncate">
                       {skill.name}
                     </span>

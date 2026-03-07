@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import {
-  MagnifyingGlassIcon,
-  TrashIcon,
-  PencilIcon,
-} from '@heroicons/react/24/outline';
+import SearchIcon from '../icons/SearchIcon';
+import TrashIcon from '../icons/TrashIcon';
+import PencilIcon from '../icons/PencilIcon';
 import ConnectorIcon from '../icons/ConnectorIcon';
 import { i18nService } from '../../services/i18n';
 import { mcpService } from '../../services/mcp';
@@ -293,7 +291,7 @@ const McpManager: React.FC = () => {
       {/* Search */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
           <input
             type="text"
             placeholder={i18nService.t('searchMcpServers')}

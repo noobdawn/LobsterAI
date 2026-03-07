@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon } from '@heroicons/react/24/outline';
+import SearchIcon from '../icons/SearchIcon';
 import { i18nService } from '../../services/i18n';
 import type { CoworkSessionSummary } from '../../types/cowork';
 import CoworkSessionList from './CoworkSessionList';
@@ -77,7 +78,7 @@ const CoworkSearchModal: React.FC<CoworkSearchModalProps> = ({
       >
         <div className="flex items-center gap-3 px-4 py-3 border-b dark:border-claude-darkBorder border-claude-border">
           <div className="relative flex-1">
-            <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary" />
             <input
               ref={searchInputRef}
               value={searchQuery}
