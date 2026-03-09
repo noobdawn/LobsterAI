@@ -678,6 +678,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
           return null;
         }
       },
+      getFeishuConfig: () => {
+        try {
+          return getIMGatewayManager().getConfig().feishu;
+        } catch {
+          return null;
+        }
+      },
     });
   }
   return openClawConfigSync;
@@ -2217,6 +2224,10 @@ if (!gotTheLock) {
       // Re-sync OpenClaw config so dingtalk-connector picks up new credentials
       if (config.dingtalk) {
         void syncOpenClawConfig({ reason: 'im-dingtalk-config-change', restartGatewayIfRunning: false });
+      }
+      // Re-sync OpenClaw config so feishu-openclaw-plugin picks up new credentials
+      if (config.feishu) {
+        void syncOpenClawConfig({ reason: 'im-feishu-config-change', restartGatewayIfRunning: false });
       }
       return { success: true };
     } catch (error) {

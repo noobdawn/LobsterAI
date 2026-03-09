@@ -2,7 +2,7 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import type { CoworkConfig, CoworkExecutionMode } from '../coworkStore';
-import type { DingTalkConfig } from '../im/types';
+import type { DingTalkConfig, FeishuConfig } from '../im/types';
 import { resolveRawApiConfig } from './claudeSettings';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 
@@ -52,17 +52,20 @@ type OpenClawConfigSyncDeps = {
   engineManager: OpenClawEngineManager;
   getCoworkConfig: () => CoworkConfig;
   getDingTalkConfig: () => DingTalkConfig | null;
+  getFeishuConfig: () => FeishuConfig | null;
 };
 
 export class OpenClawConfigSync {
   private readonly engineManager: OpenClawEngineManager;
   private readonly getCoworkConfig: () => CoworkConfig;
   private readonly getDingTalkConfig: () => DingTalkConfig | null;
+  private readonly getFeishuConfig: () => FeishuConfig | null;
 
   constructor(deps: OpenClawConfigSyncDeps) {
     this.engineManager = deps.engineManager;
     this.getCoworkConfig = deps.getCoworkConfig;
     this.getDingTalkConfig = deps.getDingTalkConfig;
+    this.getFeishuConfig = deps.getFeishuConfig;
   }
 
   sync(reason: string): OpenClawConfigSyncResult {
@@ -104,10 +107,15 @@ export class OpenClawConfigSync {
       ? this.engineManager.getGatewayConnectionInfo().token || ''
       : '';
 
+    const feishuConfig = this.getFeishuConfig();
+    const hasFeishu = feishuConfig?.enabled && feishuConfig.appId;
+
+    const hasAnyChannel = hasDingTalk || hasFeishu;
+
     const managedConfig: Record<string, unknown> = {
       gateway: {
         mode: 'local',
-        ...(hasDingTalk ? {
+        ...(hasAnyChannel ? {
           http: {
             endpoints: {
               chatCompletions: { enabled: true },
@@ -148,9 +156,15 @@ export class OpenClawConfigSync {
       ...(preinstalledPluginIds.length > 0
         ? {
             plugins: {
-              entries: Object.fromEntries(
-                preinstalledPluginIds.map((id) => [id, { enabled: true }]),
-              ),
+              entries: {
+                ...Object.fromEntries(
+                  preinstalledPluginIds.map((id) => [id, { enabled: true }]),
+                ),
+                // Disable the built-in feishu plugin when the official one is preinstalled
+                ...(preinstalledPluginIds.includes('feishu-openclaw-plugin')
+                  ? { feishu: { enabled: false } }
+                  : {}),
+              },
             },
           }
         : {}),
@@ -161,6 +175,23 @@ export class OpenClawConfigSync {
             clientId: dingTalkConfig.clientId,
             clientSecret: dingTalkConfig.clientSecret,
             ...(gatewayToken ? { gatewayToken } : {}),
+          },
+          ...(hasFeishu ? {
+            feishu: {
+              enabled: true,
+              appId: feishuConfig.appId,
+              appSecret: feishuConfig.appSecret,
+              domain: feishuConfig.domain || 'feishu',
+            },
+          } : {}),
+        },
+      } : hasFeishu ? {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: feishuConfig.appId,
+            appSecret: feishuConfig.appSecret,
+            domain: feishuConfig.domain || 'feishu',
           },
         },
       } : {}),
