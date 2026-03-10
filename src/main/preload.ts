@@ -222,6 +222,18 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on('cowork:stream:error', handler);
       return () => ipcRenderer.removeListener('cowork:stream:error', handler);
     },
+    onStreamTokenUsage: (callback: (data: { sessionId: string; inputTokens: number; outputTokens: number }) => void) => {
+      const handler = (_event: any, data: { sessionId: string; inputTokens: number; outputTokens: number }) => callback(data);
+      ipcRenderer.on('cowork:stream:tokenUsage', handler);
+      return () => ipcRenderer.removeListener('cowork:stream:tokenUsage', handler);
+    },
+    onStreamContextCompacted: (callback: (data: { sessionId: string; tokensBefore: number; tokensAfter: number; tokensFreed: number; mode: 'auto' | 'manual' }) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on('cowork:stream:contextCompacted', handler);
+      return () => ipcRenderer.removeListener('cowork:stream:contextCompacted', handler);
+    },
+    compactSession: (sessionId: string) =>
+      ipcRenderer.invoke('cowork:session:compact', sessionId),
   },
   dialog: {
     selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),

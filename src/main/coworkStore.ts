@@ -329,6 +329,8 @@ export interface CoworkSession {
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
   messages: CoworkMessage[];
+  lastInputTokens?: number;
+  lastOutputTokens?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -549,12 +551,14 @@ export class CoworkStore {
       system_prompt: string;
       execution_mode?: string | null;
       active_skill_ids?: string | null;
+      last_input_tokens?: number | null;
+      last_output_tokens?: number | null;
       created_at: number;
       updated_at: number;
     }
 
     const row = this.getOne<SessionRow>(`
-      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, created_at, updated_at
+      SELECT id, title, claude_session_id, status, pinned, cwd, system_prompt, execution_mode, active_skill_ids, last_input_tokens, last_output_tokens, created_at, updated_at
       FROM cowork_sessions
       WHERE id = ?
     `, [id]);
@@ -583,6 +587,8 @@ export class CoworkStore {
       executionMode: (row.execution_mode as CoworkExecutionMode) || 'local',
       activeSkillIds,
       messages,
+      lastInputTokens: row.last_input_tokens ?? 0,
+      lastOutputTokens: row.last_output_tokens ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -778,6 +784,59 @@ export class CoworkStore {
       content: message.content,
       timestamp: now,
       metadata: message.metadata,
+    };
+  }
+
+  clearSessionMessages(sessionId: string): void {
+    this.db.run('DELETE FROM cowork_messages WHERE session_id = ?', [sessionId]);
+    this.saveDb();
+  }
+
+  updateSessionTokenUsage(sessionId: string, inputTokens: number, outputTokens: number): void {
+    this.db.run(
+      'UPDATE cowork_sessions SET last_input_tokens = ?, last_output_tokens = ? WHERE id = ?',
+      [inputTokens, outputTokens, sessionId]
+    );
+    this.saveDb();
+  }
+
+  /**
+   * Estimate total token count from stored message content (chars / 4).
+   * Uses a lightweight SQL query instead of loading all message objects.
+   * Counts only messages after the last compact summary boundary.
+   */
+  estimateSessionTokens(sessionId: string): { estimatedTokens: number; totalChars: number; messageCount: number } {
+    // Find the ROWID of the last compact summary (if any)
+    const boundaryRow = this.getOne<{ rowid: number }>(
+      `SELECT ROWID as rowid FROM cowork_messages
+       WHERE session_id = ? AND metadata LIKE '%"isCompactSummary":true%'
+       ORDER BY COALESCE(sequence, created_at) DESC, created_at DESC, ROWID DESC
+       LIMIT 1`,
+      [sessionId]
+    );
+
+    let result: { total_chars: number; msg_count: number } | undefined;
+    if (boundaryRow) {
+      result = this.getOne<{ total_chars: number; msg_count: number }>(
+        `SELECT COALESCE(SUM(LENGTH(content)), 0) as total_chars, COUNT(*) as msg_count
+         FROM cowork_messages
+         WHERE session_id = ? AND ROWID >= ?`,
+        [sessionId, boundaryRow.rowid]
+      );
+    } else {
+      result = this.getOne<{ total_chars: number; msg_count: number }>(
+        `SELECT COALESCE(SUM(LENGTH(content)), 0) as total_chars, COUNT(*) as msg_count
+         FROM cowork_messages
+         WHERE session_id = ?`,
+        [sessionId]
+      );
+    }
+
+    const totalChars = result?.total_chars ?? 0;
+    return {
+      estimatedTokens: Math.ceil(totalChars / 4),
+      totalChars,
+      messageCount: result?.msg_count ?? 0,
     };
   }
 

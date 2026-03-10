@@ -1047,10 +1047,34 @@ const AssistantTurnBlock: React.FC<{
     const content = mapDisplayText ? mapDisplayText(rawContent) : rawContent;
     if (!content.trim()) return null;
 
+    // Compact summary: show as collapsible block
+    if (message.metadata?.isCompactSummary) {
+      return (
+        <details className="rounded-lg border dark:border-claude-darkBorder/70 border-claude-border/70 dark:bg-claude-darkBg/40 bg-claude-bg/60 px-3 py-2 group">
+          <summary className="flex items-center gap-2 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+            <svg className="h-4 w-4 flex-shrink-0 dark:text-claude-darkTextSecondary text-claude-textSecondary" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 6h8M4 10h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary">
+              {i18nService.t('contextCompactedSummary')}
+            </span>
+            <svg className="h-3 w-3 ml-auto dark:text-claude-darkTextSecondary text-claude-textSecondary transition-transform group-open:rotate-180" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </summary>
+          <div className="mt-2 pt-2 border-t dark:border-claude-darkBorder/50 border-claude-border/50">
+            <div className="text-xs whitespace-pre-wrap dark:text-claude-darkTextSecondary text-claude-textSecondary max-h-[300px] overflow-y-auto">
+              {content}
+            </div>
+          </div>
+        </details>
+      );
+    }
+
     return (
       <div className="rounded-lg border dark:border-claude-darkBorder/70 border-claude-border/70 dark:bg-claude-darkBg/40 bg-claude-bg/60 px-3 py-2">
-        <div className="flex items-start gap-2">
-          <InformationCircleIcon className="h-4 w-4 mt-0.5 dark:text-claude-darkTextSecondary text-claude-textSecondary flex-shrink-0" />
+        <div className="flex items-center gap-2">
+          <InformationCircleIcon className="h-4 w-4 dark:text-claude-darkTextSecondary text-claude-textSecondary flex-shrink-0" />
           <div className="text-xs whitespace-pre-wrap dark:text-claude-darkTextSecondary text-claude-textSecondary">
             {content}
           </div>

@@ -26,6 +26,8 @@ interface CoworkSession {
   executionMode: 'auto' | 'local' | 'sandbox';
   activeSkillIds: string[];
   messages: CoworkMessage[];
+  lastInputTokens?: number;
+  lastOutputTokens?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -340,6 +342,9 @@ interface IElectronAPI {
     onStreamPermission: (callback: (data: { sessionId: string; request: CoworkPermissionRequest }) => void) => () => void;
     onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => () => void;
     onStreamError: (callback: (data: { sessionId: string; error: string }) => void) => () => void;
+    onStreamTokenUsage: (callback: (data: { sessionId: string; inputTokens: number; outputTokens: number }) => void) => () => void;
+    onStreamContextCompacted: (callback: (data: { sessionId: string; tokensBefore: number; tokensAfter: number; tokensFreed: number; mode: 'auto' | 'manual' }) => void) => () => void;
+    compactSession: (sessionId: string) => Promise<{ success: boolean; tokensBefore?: number; tokensAfter?: number; tokensFreed?: number; error?: string }>;
   };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;

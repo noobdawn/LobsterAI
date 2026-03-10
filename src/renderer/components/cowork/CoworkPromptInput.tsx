@@ -15,6 +15,7 @@ import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import { Skill } from '../../types/skill';
 import { CoworkImageAttachment } from '../../types/cowork';
 import { getCompactFolderName } from '../../utils/path';
+import ContextUsageIndicator from './ContextUsageIndicator';
 
 type CoworkAttachment = {
   path: string;
@@ -641,6 +642,7 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
                   onManageSkills={handleManageSkills}
                 />
                 <ActiveSkillBadge />
+                <ContextUsageIndicator />
               </div>
               <div className="flex items-center gap-2">
                 {isStreaming ? (

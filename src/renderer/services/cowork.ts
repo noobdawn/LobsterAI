@@ -15,6 +15,9 @@ import {
   dequeuePendingPermission,
   setConfig,
   clearCurrentSession,
+  updateTokenUsage,
+  clearTokenUsage,
+  setCompacting,
 } from '../store/slices/coworkSlice';
 import type {
   CoworkSession,
@@ -119,6 +122,42 @@ class CoworkService {
       store.dispatch(updateSessionStatus({ sessionId, status: 'error' }));
     });
     this.streamListenerCleanups.push(errorCleanup);
+
+    // Token usage listener
+    if (cowork.onStreamTokenUsage) {
+      const tokenUsageCleanup = cowork.onStreamTokenUsage(({ sessionId, inputTokens, outputTokens }) => {
+        store.dispatch(updateTokenUsage({ sessionId, inputTokens, outputTokens }));
+      });
+      this.streamListenerCleanups.push(tokenUsageCleanup);
+    }
+
+    // Context compacted listener
+    if (cowork.onStreamContextCompacted) {
+      const contextCompactedCleanup = cowork.onStreamContextCompacted(({ sessionId, tokensFreed, mode }) => {
+        // Clear compacting state
+        store.dispatch(setCompacting({ sessionId, compacting: false }));
+        // Only reset token usage if session is not streaming (avoid clearing new conversation data)
+        const state = store.getState();
+        const isCurrentlyStreaming = state.cowork.isStreaming && state.cowork.currentSessionId === sessionId;
+        if (!isCurrentlyStreaming) {
+          store.dispatch(clearTokenUsage(sessionId));
+        }
+        // Add a system message to the chat to notify the user
+        const freedStr = tokensFreed >= 1000 ? `${(tokensFreed / 1000).toFixed(1)}K` : String(tokensFreed);
+        const modeLabel = mode === 'auto' ? 'auto' : 'manual';
+        store.dispatch(addMessage({
+          sessionId,
+          message: {
+            id: `compact-${Date.now()}`,
+            type: 'system',
+            content: `Context compacted · ${modeLabel} · ${freedStr} tokens freed`,
+            timestamp: Date.now(),
+            metadata: { isCompactNotice: true },
+          },
+        }));
+      });
+      this.streamListenerCleanups.push(contextCompactedCleanup);
+    }
   }
 
   private cleanupListeners(): void {
@@ -171,6 +210,7 @@ class CoworkService {
     }
 
     store.dispatch(setStreaming(true));
+    store.dispatch(setCompacting({ sessionId: options.sessionId, compacting: false }));
     store.dispatch(updateSessionStatus({ sessionId: options.sessionId, status: 'running' }));
 
     const result = await cowork.continueSession({
@@ -331,6 +371,14 @@ class CoworkService {
     if (result.success && result.session) {
       store.dispatch(setCurrentSession(result.session));
       store.dispatch(setStreaming(result.session.status === 'running'));
+      // Restore persisted token usage into Redux
+      if (result.session.lastInputTokens && result.session.lastInputTokens > 0) {
+        store.dispatch(updateTokenUsage({
+          sessionId,
+          inputTokens: result.session.lastInputTokens,
+          outputTokens: result.session.lastOutputTokens ?? 0,
+        }));
+      }
       return result.session;
     }
 
@@ -480,6 +528,32 @@ class CoworkService {
 
   clearSession(): void {
     store.dispatch(clearCurrentSession());
+  }
+
+  async compactSession(sessionId: string): Promise<boolean> {
+    const cowork = window.electron?.cowork;
+    if (!cowork?.compactSession) return false;
+
+    store.dispatch(setCompacting({ sessionId, compacting: true }));
+    try {
+      const result = await cowork.compactSession(sessionId);
+      if (!result?.success) {
+        store.dispatch(setCompacting({ sessionId, compacting: false }));
+      } else {
+        // Fallback: if contextCompacted event doesn't arrive within 5s, force clear
+        setTimeout(() => {
+          const state = store.getState();
+          if (state.cowork.compactingSessions[sessionId]) {
+            store.dispatch(setCompacting({ sessionId, compacting: false }));
+          }
+        }, 5000);
+      }
+      return Boolean(result?.success);
+    } catch (error) {
+      store.dispatch(setCompacting({ sessionId, compacting: false }));
+      console.error('Failed to compact session:', error);
+      return false;
+    }
   }
 
   destroy(): void {

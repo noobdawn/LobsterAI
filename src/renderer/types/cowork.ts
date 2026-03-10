@@ -50,6 +50,8 @@ export interface CoworkSession {
   executionMode: CoworkExecutionMode;
   activeSkillIds: string[];
   messages: CoworkMessage[];
+  lastInputTokens?: number;
+  lastOutputTokens?: number;
   createdAt: number;
   updatedAt: number;
 }

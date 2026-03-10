@@ -640,6 +640,18 @@ const getCoworkRunner = () => {
         }
       });
     });
+
+    coworkRunner.on('tokenUsage', (sessionId: string, usage: { inputTokens: number; outputTokens: number }) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('cowork:stream:tokenUsage', { sessionId, ...usage });
+      }
+    });
+
+    coworkRunner.on('contextCompacted', (sessionId: string, info: { tokensBefore: number; tokensAfter: number; tokensFreed: number; mode: 'auto' | 'manual' }) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('cowork:stream:contextCompacted', { sessionId, ...info });
+      }
+    });
   }
   return coworkRunner;
 };
@@ -1362,6 +1374,19 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to stop session',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:session:compact', async (_event, sessionId: string) => {
+    try {
+      const runner = getCoworkRunner();
+      const result = await runner.compactSession(sessionId, 'manual');
+      return { success: true, ...result };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to compact session',
       };
     }
   });

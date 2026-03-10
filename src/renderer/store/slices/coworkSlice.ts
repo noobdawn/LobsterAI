@@ -18,6 +18,8 @@ interface CoworkState {
   isStreaming: boolean;
   pendingPermissions: CoworkPermissionRequest[];
   config: CoworkConfig;
+  tokenUsage: Record<string, { inputTokens: number; outputTokens: number }>;
+  compactingSessions: Record<string, boolean>;
 }
 
 const initialState: CoworkState = {
@@ -39,6 +41,8 @@ const initialState: CoworkState = {
     memoryGuardLevel: 'strict',
     memoryUserMemoriesMaxItems: 12,
   },
+  tokenUsage: {},
+  compactingSessions: {},
 };
 
 const markSessionRead = (state: CoworkState, sessionId: string | null) => {
@@ -143,6 +147,8 @@ const coworkSlice = createSlice({
       const sessionId = action.payload;
       state.sessions = state.sessions.filter(s => s.id !== sessionId);
       state.unreadSessionIds = state.unreadSessionIds.filter((id) => id !== sessionId);
+      delete state.tokenUsage[sessionId];
+      delete state.compactingSessions[sessionId];
 
       if (state.currentSessionId === sessionId) {
         state.currentSessionId = null;
@@ -154,6 +160,10 @@ const coworkSlice = createSlice({
       const sessionIds = new Set(action.payload);
       state.sessions = state.sessions.filter(s => !sessionIds.has(s.id));
       state.unreadSessionIds = state.unreadSessionIds.filter((id) => !sessionIds.has(id));
+      sessionIds.forEach(id => {
+        delete state.tokenUsage[id];
+        delete state.compactingSessions[id];
+      });
 
       if (state.currentSessionId && sessionIds.has(state.currentSessionId)) {
         state.currentSessionId = null;
@@ -258,6 +268,24 @@ const coworkSlice = createSlice({
       state.currentSession = null;
       state.isStreaming = false;
     },
+
+    updateTokenUsage(state, action: PayloadAction<{ sessionId: string; inputTokens: number; outputTokens: number }>) {
+      const { sessionId, inputTokens, outputTokens } = action.payload;
+      state.tokenUsage[sessionId] = { inputTokens, outputTokens };
+    },
+
+    clearTokenUsage(state, action: PayloadAction<string>) {
+      delete state.tokenUsage[action.payload];
+    },
+
+    setCompacting(state, action: PayloadAction<{ sessionId: string; compacting: boolean }>) {
+      const { sessionId, compacting } = action.payload;
+      if (compacting) {
+        state.compactingSessions[sessionId] = true;
+      } else {
+        delete state.compactingSessions[sessionId];
+      }
+    },
   },
 });
 
@@ -282,6 +310,9 @@ export const {
   setConfig,
   updateConfig,
   clearCurrentSession,
+  updateTokenUsage,
+  clearTokenUsage,
+  setCompacting,
 } = coworkSlice.actions;
 
 export default coworkSlice.reducer;
