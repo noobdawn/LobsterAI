@@ -401,8 +401,15 @@ class ApiService {
       effectiveConfig = providerConfig;
     }
 
+    // Priority logic: if provider has no API key, fallback to proxy mode
     if (this.providerRequiresApiKey(provider) && !effectiveConfig.apiKey) {
-      throw new ApiError('API key is not configured. Please set your API key in the settings menu.');
+      // Check if user is logged in - if so, fallback to proxy
+      const authState = store.getState().auth;
+      if (authState.isLoggedIn) {
+        return this.chatWithProxy(message, onProgress, history, selectedModel.id);
+      }
+      // Not logged in and no API key -> require login
+      throw new ApiError('LOGIN_REQUIRED');
     }
 
     // 根据 API 协议格式决定调用方式：
