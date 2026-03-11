@@ -120,13 +120,51 @@ async function captureAllDisplaysWindows(
     thumbnailSize: { width: maxPhysW, height: maxPhysH },
   });
 
-  return displays.map((d, idx) => {
-    // Try matching by display_id first (reliable on most Windows setups)
-    let src = sources.find((s) => s.display_id === String(d.id));
-    // Fallback: match by source index (sources are ordered like displays)
-    if (!src && idx < sources.length) src = sources[idx];
-    return src ? src.thumbnail : null;
-  });
+  const result: (Electron.NativeImage | null)[] = new Array(displays.length).fill(null);
+  const usedSourceIdx = new Set<number>();
+
+  // Pass 1: match by display_id (reliable on most setups)
+  for (let di = 0; di < displays.length; di++) {
+    const si = sources.findIndex(
+      (s, i) => !usedSourceIdx.has(i) && s.display_id === String(displays[di].id),
+    );
+    if (si >= 0) {
+      result[di] = sources[si].thumbnail;
+      usedSourceIdx.add(si);
+    }
+  }
+
+  // Pass 2: match unmatched displays by thumbnail physical size
+  // (works when displays have different resolutions)
+  for (let di = 0; di < displays.length; di++) {
+    if (result[di]) continue;
+    const d = displays[di];
+    const physW = Math.round(d.size.width * d.scaleFactor);
+    const physH = Math.round(d.size.height * d.scaleFactor);
+    const si = sources.findIndex((s, i) => {
+      if (usedSourceIdx.has(i)) return false;
+      const sz = s.thumbnail.getSize();
+      return Math.abs(sz.width - physW) < 50 && Math.abs(sz.height - physH) < 50;
+    });
+    if (si >= 0) {
+      result[di] = sources[si].thumbnail;
+      usedSourceIdx.add(si);
+    }
+  }
+
+  // Pass 3: assign remaining sources to remaining displays by order
+  for (let di = 0; di < displays.length; di++) {
+    if (result[di]) continue;
+    for (let si = 0; si < sources.length; si++) {
+      if (!usedSourceIdx.has(si)) {
+        result[di] = sources[si].thumbnail;
+        usedSourceIdx.add(si);
+        break;
+      }
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +246,11 @@ function showOverlaysOnAllDisplays(
       if (isMac) {
         // macOS only: prevent creating a new Space for the window
         win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      } else {
+        // Windows: force bounds after creation to ensure correct positioning
+        // on extended displays with potentially different DPI settings.
+        // The constructor bounds may be interpreted in the primary display's DPI.
+        win.setBounds({ x, y, width, height });
       }
       windows.push(win);
 
