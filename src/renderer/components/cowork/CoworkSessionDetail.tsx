@@ -1584,13 +1584,13 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     setIsScrollable((prev) => (prev === scrollable ? prev : scrollable));
     if (!scrollable) return;
 
+    // Skip turn nav updates during programmatic navigation / auto-scrolling
+    if (isNavigatingRef.current) return;
+
     // Show turn nav and reset hide timer
     setShowTurnNav(true);
     if (hideNavTimerRef.current) clearTimeout(hideNavTimerRef.current);
     hideNavTimerRef.current = setTimeout(() => setShowTurnNav(false), NAV_HIDE_DELAY);
-
-    // Skip index recalculation during programmatic navigation
-    if (isNavigatingRef.current) return;
 
     // Update current turn index based on cached turn elements
     const turnEls = turnElsCacheRef.current;
@@ -1720,14 +1720,18 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
     }
     const container = scrollContainerRef.current;
     if (container) {
+      // Guard against scroll handler triggering re-renders during programmatic scroll
+      isNavigatingRef.current = true;
       container.scrollTop = container.scrollHeight;
       setIsScrollable(container.scrollHeight > container.clientHeight);
+      // Release the guard after the browser processes the scroll event
+      requestAnimationFrame(() => { isNavigatingRef.current = false; });
     }
     // Sync turn index to last when auto-scrolled to bottom
     if (turns.length > 0) {
       const lastIndex = turns.length - 1;
       currentTurnIndexRef.current = lastIndex;
-      setCurrentTurnIndex(lastIndex);
+      setCurrentTurnIndex((prev) => (prev === lastIndex ? prev : lastIndex));
     }
   }, [currentSession?.messages?.length, lastMessageContent, isStreaming, shouldAutoScroll, turns.length]);
 

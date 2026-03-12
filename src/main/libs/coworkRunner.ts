@@ -97,6 +97,25 @@ const STDERR_FATAL_PATTERNS = [
   /overloaded/i,
 ];
 const CONTENT_TRUNCATED_HINT = '\n...[truncated to prevent memory pressure]';
+
+/** Returns true if the error message indicates the model's context window was exceeded. */
+function isContextLengthError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes('maximum context length') ||
+    lower.includes('context_length_exceeded') ||
+    lower.includes('context window') ||
+    lower.includes('exceeds the maximum') ||
+    lower.includes('reduce the length of the messages') ||
+    // Chinese-language context length errors (GLM, Qwen, etc.)
+    lower.includes('上下文长度超') ||
+    lower.includes('上下文超出') ||
+    lower.includes('上下文长度') ||
+    lower.includes('最大token') ||
+    lower.includes('token数量超') ||
+    lower.includes('请求的token数超')
+  );
+}
 const TOOL_INPUT_PREVIEW_MAX_CHARS = 4000;
 const TOOL_INPUT_PREVIEW_MAX_DEPTH = 5;
 const TOOL_INPUT_PREVIEW_MAX_KEYS = 60;
@@ -4935,9 +4954,14 @@ export class CoworkRunner extends EventEmitter {
       this.emit('tokenUsage', sessionId, { inputTokens: estimatedTokens, outputTokens });
       this.store.updateSessionTokenUsage(sessionId, estimatedTokens, outputTokens);
 
-      // Auto-compact when estimated tokens exceed threshold
-      if (estimatedTokens > AUTO_COMPACT_THRESHOLD) {
-        coworkLog('INFO', 'contextCompact', `Auto-compact triggered: ${estimatedTokens} estimated tokens exceeds threshold ${AUTO_COMPACT_THRESHOLD}`, { sessionId });
+      // Auto-compact when token count exceeds threshold.
+      // Use the larger of estimated (chars/4 from stored messages) and perCallTokens (from
+      // message_start or message_delta usage events). For Anthropic API, perCallTokens is
+      // accurate. For OpenAI-compat, it reflects actual prompt_tokens when stream_options
+      // include_usage is enabled; otherwise falls back to estimatedTokens.
+      const effectiveTokens = Math.max(estimatedTokens, perCallTokens);
+      if (effectiveTokens > AUTO_COMPACT_THRESHOLD) {
+        coworkLog('INFO', 'contextCompact', `Auto-compact triggered: effectiveTokens=${effectiveTokens} (estimated=${estimatedTokens}, perCall=${perCallTokens}) > ${AUTO_COMPACT_THRESHOLD}`, { sessionId });
         this.compactSession(sessionId, 'auto').catch((err) => {
           coworkLog('WARN', 'contextCompact', `Auto-compact failed: ${err instanceof Error ? err.message : String(err)}`, { sessionId });
         });
@@ -4958,6 +4982,25 @@ export class CoworkRunner extends EventEmitter {
             : payloadError
               ? payloadError
               : 'Claude run failed';
+
+        // Detect context length exceeded errors and auto-compact instead of failing.
+        if (isContextLengthError(errorMessage) && !this.compactingSessionIds.has(sessionId)) {
+          coworkLog('INFO', 'contextCompact', 'Context overflow detected, triggering auto-compact', { sessionId, errorMessage: errorMessage.slice(0, 200) });
+          // Set status to error so the post-event-loop code skips emitting 'complete'.
+          this.store.updateSession(sessionId, { status: 'error' });
+          this.compactSession(sessionId, 'auto')
+            .then(() => {
+              // Notify user to resend (contextCompacted event already shows compaction notice).
+              // Emit 'error' (empty msg) so the frontend unlocks the input field.
+              this.emit('error', sessionId, '');
+            })
+            .catch((err) => {
+              coworkLog('WARN', 'contextCompact', `Auto-compact after overflow failed: ${err instanceof Error ? err.message : String(err)}`, { sessionId });
+              this.handleError(sessionId, errorMessage);
+            });
+          return;
+        }
+
         this.handleError(sessionId, errorMessage);
         return;
       }
@@ -5187,6 +5230,18 @@ export class CoworkRunner extends EventEmitter {
         const cacheRead = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0;
         const cacheCreation = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0;
         activeSession.lastMessageStartInputTokens = raw + cacheRead + cacheCreation;
+      }
+      return;
+    }
+
+    // For OpenAI-compat mode, the proxy emits message_start with input_tokens=0 (unknown at
+    // stream start). When stream_options.include_usage is enabled, the final stream chunk carries
+    // prompt_tokens which the proxy forwards here as message_delta.usage.input_tokens.
+    if (eventType === 'message_delta') {
+      const usage = event.usage as Record<string, unknown> | undefined;
+      const inputTokens = typeof usage?.input_tokens === 'number' ? usage.input_tokens : 0;
+      if (inputTokens > 0) {
+        activeSession.lastMessageStartInputTokens = Math.max(activeSession.lastMessageStartInputTokens, inputTokens);
       }
       return;
     }

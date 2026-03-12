@@ -2650,6 +2650,12 @@ async function handleRequest(
     : openAIRequest;
   const stream = Boolean(upstreamRequest.stream);
 
+  // Request token usage in the final stream chunk so the runner can use accurate
+  // prompt_tokens for auto-compact triggering (forwarded via message_delta.usage.input_tokens).
+  if (stream && upstreamAPIType === 'chat_completions') {
+    (upstreamRequest as Record<string, unknown>).stream_options = { include_usage: true };
+  }
+
   console.log(`[CoworkProxy] Upstream: apiType=${upstreamAPIType}, model=${upstreamRequest.model}, stream=${stream}, provider=${upstreamConfig.provider}`);
 
   const headers: Record<string, string> = {
@@ -2786,6 +2792,34 @@ async function handleRequest(
               writeJSON(res, 502, createAnthropicErrorBody(message));
               return;
             }
+          }
+        }
+      }
+
+      // Some providers (e.g. Ollama, local inference servers) do not support stream_options.
+      // Retry once without it to avoid breaking these providers.
+      if (!upstreamResponse.ok && (upstreamRequest as Record<string, unknown>).stream_options) {
+        const errorLower = firstErrorMessage.toLowerCase();
+        if (
+          errorLower.includes('stream_options') ||
+          errorLower.includes('unknown parameter') ||
+          errorLower.includes('unrecognized field') ||
+          errorLower.includes('extra inputs are not permitted')
+        ) {
+          delete (upstreamRequest as Record<string, unknown>).stream_options;
+          try {
+            upstreamResponse = await sendUpstreamRequest(upstreamRequest, currentTargetURL);
+            if (!upstreamResponse.ok) {
+              const retryErrorText = await upstreamResponse.text();
+              firstErrorMessage = extractErrorMessage(retryErrorText);
+            } else {
+              console.info('[CoworkProxy] Retried request after removing unsupported stream_options');
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Network error';
+            lastProxyError = message;
+            writeJSON(res, 502, createAnthropicErrorBody(message));
+            return;
           }
         }
       }
