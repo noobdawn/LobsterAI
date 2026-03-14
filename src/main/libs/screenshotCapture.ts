@@ -359,8 +359,9 @@ export async function captureScreenshot(
     const isWindows = process.platform === 'win32';
     const overlayBounds: Electron.Rectangle[] = displays.map((d) => d.bounds);
 
-    // 5. Convert each display capture to a PNG data URL for overlay background.
-    //    PNG is lossless and actually smaller than high-quality JPEG for UI screenshots.
+    // 5. Convert each display capture to a JPEG data URL for overlay background.
+    //    JPEG encodes 3-5x faster and produces 60-80% smaller output than PNG.
+    //    Background is only for visual reference during selection, lossy is fine.
     //    Cap at 2x logical resolution: sharp enough for Retina, avoids 4K+ overhead.
     const bgUrls: string[] = displays.map((d, i) => {
       const img = images[i];
@@ -376,9 +377,9 @@ export async function captureScreenshot(
       const bgSize = bgImg.getSize();
       console.log(`[Screenshot] bgUrl[${i}] original=${imgSize.width}x${imgSize.height}, bg=${bgSize.width}x${bgSize.height}${needsDownscale ? ' (capped at 2x)' : ''}, overlay bounds=${JSON.stringify(overlayBounds[i])}`);
 
-      const pngBuf = bgImg.toPNG();
-      console.log(`[Screenshot] bgUrl[${i}] PNG bytes: ${pngBuf.length}`);
-      return `data:image/png;base64,${pngBuf.toString('base64')}`;
+      const jpegBuf = bgImg.toJPEG(80);
+      console.log(`[Screenshot] bgUrl[${i}] JPEG bytes: ${jpegBuf.length}`);
+      return `data:image/jpeg;base64,${jpegBuf.toString('base64')}`;
     });
 
     // 6. Determine which display the main window is on
