@@ -720,6 +720,10 @@ export class OpenClawConfigSync {
         })(),
         groupPolicy: dingTalkConfig.groupPolicy || 'open',
         sessionTimeout: dingTalkConfig.sessionTimeout ?? 1800000,
+        separateSessionByConversation: dingTalkConfig.separateSessionByConversation ?? true,
+        groupSessionScope: dingTalkConfig.groupSessionScope || 'group',
+        sharedMemoryAcrossConversations: dingTalkConfig.sharedMemoryAcrossConversations ?? false,
+        ...(dingTalkConfig.gatewayBaseUrl ? { gatewayBaseUrl: dingTalkConfig.gatewayBaseUrl } : {}),
         ...(gatewayToken ? { gatewayToken } : {}),
       };
       managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'dingtalk-connector': dingtalkChannel };

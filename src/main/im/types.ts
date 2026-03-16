@@ -12,7 +12,12 @@ export interface DingTalkOpenClawConfig {
   dmPolicy: 'open' | 'pairing' | 'allowlist';
   allowFrom: string[];
   groupPolicy: 'open' | 'allowlist';
+  /** @deprecated since dingtalk-connector v0.7.5 – use Gateway session.reset.idleMinutes instead */
   sessionTimeout: number;
+  separateSessionByConversation: boolean;
+  groupSessionScope: 'group' | 'group_sender';
+  sharedMemoryAcrossConversations: boolean;
+  gatewayBaseUrl: string;
   debug: boolean;
 }
 
@@ -380,6 +385,10 @@ export const DEFAULT_DINGTALK_OPENCLAW_CONFIG: DingTalkOpenClawConfig = {
   allowFrom: [],
   groupPolicy: 'open',
   sessionTimeout: 1800000,
+  separateSessionByConversation: true,
+  groupSessionScope: 'group',
+  sharedMemoryAcrossConversations: false,
+  gatewayBaseUrl: '',
   debug: false,
 };
 

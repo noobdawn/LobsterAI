@@ -452,6 +452,10 @@ interface DingTalkOpenClawConfig {
   allowFrom: string[];
   groupPolicy: 'open' | 'allowlist';
   sessionTimeout: number;
+  separateSessionByConversation: boolean;
+  groupSessionScope: 'group' | 'group_sender';
+  sharedMemoryAcrossConversations: boolean;
+  gatewayBaseUrl: string;
   debug: boolean;
 }
 

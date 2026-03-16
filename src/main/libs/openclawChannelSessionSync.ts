@@ -69,8 +69,10 @@ export const CHANNEL_PLATFORM_MAP: Record<string, IMPlatform> = {
 };
 
 /** Parse a channel sessionKey into platform + conversationId.
- *  Supports two formats:
+ *  Supports three formats:
  *  - OpenClaw format: "agent:{agentId}:{platform}:{subtype}:{conversationId}"
+ *  - JSON SessionContext format: "agent:{agentId}:openai-user:{jsonObject}"
+ *    where jsonObject contains {"channel":"dingtalk-connector","accountid":"...","chattype":"...","peerid":"..."}
  *  - Legacy format:   "{platform}:{conversationId}"
  *  Exported for reuse by delivery target resolution.
  */
@@ -81,7 +83,30 @@ export function parseChannelSessionKey(sessionKey: string): { platform: IMPlatfo
   // For HTTP-originating sessions (e.g. DingTalk plugin), the format is:
   //   agent:{agentId}:openai-user:{channel}:{conversationId}
   // where parts[2] is "openai-user" and the actual channel name is in parts[3].
+  //
+  // Since v0.7.5 dingtalk-connector, the format may also be JSON SessionContext:
+  //   agent:{agentId}:openai-user:{"channel":"dingtalk-connector","accountid":"...","chattype":"...","peerid":"..."}
   if (sessionKey.startsWith('agent:')) {
+    // Try JSON SessionContext format first:
+    // Match "agent:{agentId}:{subtype}:{json}" where json starts with '{'
+    const jsonIdx = sessionKey.indexOf(':{');
+    if (jsonIdx > 0) {
+      const jsonStr = sessionKey.slice(jsonIdx + 1);
+      try {
+        const ctx = JSON.parse(jsonStr);
+        if (ctx && typeof ctx.channel === 'string') {
+          const platform = CHANNEL_PLATFORM_MAP[ctx.channel];
+          if (platform) {
+            // Build a stable conversationId from the JSON context fields
+            const conversationId = ctx.peerid || ctx.conversationId || ctx.accountid || jsonStr;
+            return { platform, conversationId };
+          }
+        }
+      } catch {
+        // Not valid JSON, fall through to colon-split parsing
+      }
+    }
+
     const parts = sessionKey.split(':');
     // Need at least: agent, agentId, platform, and one more segment
     if (parts.length >= 4) {
@@ -120,13 +145,13 @@ export function parseChannelSessionKey(sessionKey: string): { platform: IMPlatfo
 /** Match OpenClaw main agent session keys like "agent:main:main" or "agent:secondary:main". */
 const MAIN_AGENT_SESSION_RE = /^agent:[^:]+:main$/;
 
-/** Map from channel prefix to title label. */
+/** Map from platform (resolved) to title label. */
 const CHANNEL_TITLE_PREFIX: Record<string, string> = {
   telegram: '[TG]',
   discord: '[Discord]',
   feishu: '[飞书]',
-  'dingtalk-connector': '[钉钉]',
-  qqbot: '[QQ]',
+  dingtalk: '[钉钉]',
+  qq: '[QQ]',
   wecom: '[企微]',
   'wecom-openclaw-plugin': '[企微]',
 };
