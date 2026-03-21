@@ -3362,6 +3362,53 @@ if (!gotTheLock) {
     return false;
   });
 
+  // Qwen OAuth 登录
+  ipcMain.handle('qwen:oauth:login', async (event) => {
+    const { startQwenOAuth } = await import('./libs/qwenOAuth');
+    
+    const progressCallback = {
+      update: (message: string) => {
+        event.sender.send('qwen:oauth:progress', message);
+      },
+      stop: (message?: string) => {
+        if (message) {
+          event.sender.send('qwen:oauth:progress', message);
+        }
+      }
+    };
+
+    try {
+      const oauthToken = await startQwenOAuth(progressCallback);
+      return {
+        success: true,
+        data: oauthToken
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'OAuth login failed'
+      };
+    }
+  });
+
+  // Qwen OAuth 刷新 token
+  ipcMain.handle('qwen:oauth:refresh', async (_event, refreshToken: string) => {
+    const { refreshQwenOAuthToken } = await import('./libs/qwenOAuth');
+    
+    try {
+      const oauthToken = await refreshQwenOAuthToken(refreshToken);
+      return {
+        success: true,
+        data: oauthToken
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Token refresh failed'
+      };
+    }
+  });
+
   // 企微 SDK 授权弹窗白名单域名
   const WECOM_AUTH_HOSTNAMES = new Set([
     'work.weixin.qq.com',

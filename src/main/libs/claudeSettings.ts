@@ -223,8 +223,12 @@ function resolveMatchedProvider(appConfig: AppConfig): { matched: MatchedProvide
     return { matched: null, error: `Provider ${providerName} is missing base URL.` };
   }
 
-  if (apiFormat === 'anthropic' && providerRequiresApiKey(providerName) && !providerConfig.apiKey?.trim()) {
-    return { matched: null, error: `Provider ${providerName} requires API key for Anthropic-compatible mode.` };
+  // Check for API key or OAuth credentials
+  const hasApiKey = providerConfig.apiKey?.trim();
+  const hasOAuthCreds = providerName === 'qwen' && (providerConfig as any).oauthCredentials;
+  
+  if (apiFormat === 'anthropic' && providerRequiresApiKey(providerName) && !hasApiKey && !hasOAuthCreds) {
+    return { matched: null, error: `Provider ${providerName} requires API key or OAuth credentials for Anthropic-compatible mode.` };
   }
 
   const matchedModel = providerConfig.models?.find((m) => m.id === modelId);
@@ -267,7 +271,22 @@ export function resolveCurrentApiConfig(target: OpenAICompatProxyTarget = 'local
   }
 
   const resolvedBaseURL = matched.baseURL;
-  const resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
+  let resolvedApiKey = matched.providerConfig.apiKey?.trim() || '';
+  
+  // Handle Qwen OAuth credentials
+  if (matched.providerName === 'qwen' && !resolvedApiKey && (matched.providerConfig as any).oauthCredentials) {
+    const oauthCreds = (matched.providerConfig as any).oauthCredentials;
+    // Check if token is still valid (with 5 minute buffer)
+    const expiryBuffer = 5 * 60 * 1000;
+    if (Date.now() < (oauthCreds.expires - expiryBuffer)) {
+      resolvedApiKey = oauthCreds.access; // Use access token as API key
+    } else {
+      // Token expired, should refresh in background
+      console.warn('Qwen OAuth token expired, please refresh credentials');
+      resolvedApiKey = oauthCreds.access; // Still try to use it, server might refresh
+    }
+  }
+  
   // Providers that don't require auth (e.g. Ollama) still need a non-empty
   // placeholder so downstream components (OpenClaw gateway, compat proxy)
   // don't reject the request with "No API key found for provider".
@@ -349,7 +368,35 @@ export function resolveRawApiConfig(): ApiConfigResolution {
   if (!matched) {
     return { config: null, error };
   }
-  const apiKey = matched.providerConfig.apiKey?.trim() || '';
+  let apiKey = matched.providerConfig.apiKey?.trim() || '';
+  let effectiveBaseURL = matched.baseURL;
+  let effectiveApiFormat = matched.apiFormat;
+  
+  // Handle Qwen OAuth credentials for OpenClaw gateway
+  if (matched.providerName === 'qwen' && !apiKey && (matched.providerConfig as any).oauthCredentials) {
+    const oauthCreds = (matched.providerConfig as any).oauthCredentials;
+    // Check if token is still valid (with 5 minute buffer)
+    const expiryBuffer = 5 * 60 * 1000;
+    if (Date.now() < (oauthCreds.expires - expiryBuffer)) {
+      apiKey = oauthCreds.access; // Use access token as API key
+      
+      // Use OAuth resourceUrl as baseURL if available
+      if (oauthCreds.resourceUrl) {
+        effectiveBaseURL = normalizeQwenBaseUrl(oauthCreds.resourceUrl);
+        effectiveApiFormat = 'openai'; // OAuth endpoints use OpenAI format
+      }
+    } else {
+      // Token expired, should refresh in background
+      console.warn('Qwen OAuth token expired for OpenClaw gateway, please refresh credentials');
+      apiKey = oauthCreds.access; // Still try to use it, server might refresh
+      
+      if (oauthCreds.resourceUrl) {
+        effectiveBaseURL = normalizeQwenBaseUrl(oauthCreds.resourceUrl);
+        effectiveApiFormat = 'openai';
+      }
+    }
+  }
+  
   // OpenClaw's gateway requires a non-empty apiKey for every provider — even
   // local servers (Ollama, vLLM, etc.) that don't enforce auth.  When the user
   // leaves the key blank we supply a placeholder so the gateway doesn't reject
@@ -359,9 +406,9 @@ export function resolveRawApiConfig(): ApiConfigResolution {
   return {
     config: {
       apiKey: effectiveApiKey,
-      baseURL: matched.baseURL,
+      baseURL: effectiveBaseURL,
       model: matched.modelId,
-      apiType: matched.apiFormat === 'anthropic' ? 'anthropic' : 'openai',
+      apiType: effectiveApiFormat === 'anthropic' ? 'anthropic' : 'openai',
     },
     providerMetadata: {
       providerName: matched.providerName,
@@ -369,6 +416,13 @@ export function resolveRawApiConfig(): ApiConfigResolution {
       supportsImage: matched.supportsImage,
     },
   };
+}
+
+function normalizeQwenBaseUrl(value: string | undefined): string {
+  const DEFAULT_BASE_URL = "https://portal.qwen.ai/v1";
+  const raw = value?.trim() || DEFAULT_BASE_URL;
+  const withProtocol = raw.startsWith("http") ? raw : `https://${raw}`;
+  return withProtocol.endsWith("/v1") ? withProtocol : `${withProtocol.replace(/\/+$/, "")}/v1`;
 }
 
 export function buildEnvForConfig(config: CoworkApiConfig): Record<string, string> {
