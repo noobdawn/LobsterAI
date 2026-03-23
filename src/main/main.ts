@@ -58,7 +58,7 @@ import { McpServerManager } from './libs/mcpServerManager';
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
-import { initLogger, getLogFilePath } from './logger';
+import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
@@ -268,7 +268,14 @@ const normalizeCaptureRect = (rect?: Partial<CaptureRect> | null): CaptureRect |
 
 const resolveTaskWorkingDirectory = (workspaceRoot: string): string => {
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
-  fs.mkdirSync(resolvedWorkspaceRoot, { recursive: true });
+  // Reject bare Windows drive roots (e.g. "D:\") — mkdir on drive roots causes EPERM,
+  // and some agent engines (OpenClaw) also fail when given a drive root as workspace.
+  if (process.platform === 'win32' && /^[a-zA-Z]:\\?$/.test(resolvedWorkspaceRoot)) {
+    throw new Error(`Cannot use a drive root as the working directory (${resolvedWorkspaceRoot}). Please select a subfolder instead, for example: ${resolvedWorkspaceRoot}Projects`);
+  }
+  if (!fs.existsSync(resolvedWorkspaceRoot)) {
+    fs.mkdirSync(resolvedWorkspaceRoot, { recursive: true });
+  }
   if (!fs.statSync(resolvedWorkspaceRoot).isDirectory()) {
     throw new Error(`Selected workspace is not a directory: ${resolvedWorkspaceRoot}`);
   }
@@ -477,8 +484,12 @@ const requestCalendarPermission = async (): Promise<boolean> => {
 
 
 // 配置应用
-if (isLinux) {
+// Linux/Windows 禁用 Chromium 沙箱：桌面应用渲染自有代码，风险可控；
+// Windows 下以管理员运行时沙箱无法降权会导致 GPU 进程启动失败 (error_code=18)
+if (isLinux || isWindows) {
   app.commandLine.appendSwitch('no-sandbox');
+}
+if (isLinux) {
   app.commandLine.appendSwitch('disable-dev-shm-usage');
 }
 if (disableGpu) {
@@ -781,6 +792,13 @@ const getOpenClawConfigSync = (): OpenClawConfigSync => {
           return null;
         }
       },
+      getWeixinConfig: () => {
+        try {
+          return getIMGatewayManager().getConfig().weixin;
+        } catch {
+          return null;
+        }
+      },
       getDiscordOpenClawConfig: () => {
         try {
           return getIMGatewayManager()?.getConfig()?.discord ?? null;
@@ -878,7 +896,20 @@ const syncOpenClawConfig = async (
     };
   }
 
-  if (!syncResult.changed || !options.restartGatewayIfRunning) {
+  // Update secret env vars so the gateway process receives the latest
+  // plaintext credentials via environment variables (openclaw.json only
+  // contains ${VAR} placeholders, never plaintext secrets).
+  const nextSecretEnvVars = getOpenClawConfigSync().collectSecretEnvVars();
+  const prevSecretEnvVars = getOpenClawEngineManager().getSecretEnvVars();
+  const secretEnvVarsChanged = JSON.stringify(nextSecretEnvVars) !== JSON.stringify(prevSecretEnvVars);
+  getOpenClawEngineManager().setSecretEnvVars(nextSecretEnvVars);
+
+  // When secret env vars change, the running gateway must be restarted even if
+  // the caller didn't request it — the ${VAR} placeholders in openclaw.json
+  // resolve from the process environment which is fixed at spawn time.
+  const needsRestart = syncResult.changed || secretEnvVarsChanged;
+
+  if (!needsRestart || (!options.restartGatewayIfRunning && !secretEnvVarsChanged)) {
     return {
       success: true,
       changed: syncResult.changed,
@@ -1605,7 +1636,7 @@ if (!gotTheLock) {
       const archiveResult = await exportLogsZip({
         outputPath,
         entries: [
-          { archiveName: 'main.log', filePath: getLogFilePath() },
+          ...getRecentMainLogEntries(),
           { archiveName: 'cowork.log', filePath: getCoworkLogPath() },
         ],
       });
@@ -1709,6 +1740,17 @@ if (!gotTheLock) {
 
   ipcMain.handle('skills:download', async (_event, source: string) => {
     return getSkillManager().downloadSkill(source);
+  });
+
+  ipcMain.handle('skills:confirmInstall', async (_event, pendingId: string, action: string) => {
+    const validActions = ['install', 'installDisabled', 'cancel'];
+    if (!validActions.includes(action)) {
+      return { success: false, error: 'Invalid action' };
+    }
+    return getSkillManager().confirmPendingInstall(
+      pendingId,
+      action as 'install' | 'installDisabled' | 'cancel'
+    );
   });
 
   ipcMain.handle('skills:getRoot', () => {
@@ -2144,6 +2186,19 @@ if (!gotTheLock) {
     try {
       const coworkStoreInstance = getCoworkStore();
       coworkStoreInstance.deleteSessions(sessionIds);
+      const router = getCoworkEngineRouter();
+      for (const sessionId of sessionIds) {
+        try {
+          getIMGatewayManager()?.getIMStore()?.deleteSessionMappingByCoworkSessionId(sessionId);
+        } catch {
+          // IM store may not be initialised yet; safe to ignore.
+        }
+        try {
+          router.onSessionDeleted(sessionId);
+        } catch {
+          // Router may not be initialised yet; safe to ignore.
+        }
+      }
       return { success: true };
     } catch (error) {
       return {
@@ -2191,6 +2246,19 @@ if (!gotTheLock) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get session',
+      };
+    }
+  });
+
+  ipcMain.handle('cowork:session:remoteManaged', async (_event, sessionId: string) => {
+    try {
+      const mapping = getIMGatewayManager()?.getIMStore()?.getSessionMappingByCoworkSessionId(sessionId);
+      return { success: true, remoteManaged: !!mapping };
+    } catch (error) {
+      return {
+        success: false,
+        remoteManaged: false,
+        error: error instanceof Error ? error.message : 'Failed to check remote managed session',
       };
     }
   });
@@ -2574,6 +2642,12 @@ if (!gotTheLock) {
 
   ipcMain.handle('scheduledTask:list', async () => {
     try {
+      // If OpenClaw gateway is not connected yet, return empty list immediately
+      // to avoid blocking the renderer init. Tasks will be loaded later via the
+      // onRefresh listener when the gateway becomes available.
+      if (!openClawRuntimeAdapter?.getGatewayClient()) {
+        return { success: true, tasks: [] };
+      }
       const tasks = await getCronJobService().listJobs();
       return { success: true, tasks };
     } catch (error) {
@@ -2809,7 +2883,7 @@ if (!gotTheLock) {
       // Only trigger sync when explicitly requested via syncGateway flag (e.g. from
       // the global Save button), to avoid frequent gateway restarts on every field blur.
       const hasOpenClawChange = config.telegram || config.discord || config.dingtalk
-        || config.feishu || config.qq || config.wecom || config.popo;
+        || config.feishu || config.qq || config.wecom || config.popo || config.weixin;
       if (options?.syncGateway && hasOpenClawChange && getOpenClawEngineManager().getStatus().phase === 'running') {
         scheduleImConfigSync();
       }
@@ -2882,6 +2956,31 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to test gateway connectivity',
       };
+    }
+  });
+
+  // Weixin QR login
+  ipcMain.handle('im:weixin:qr-login-start', async () => {
+    try {
+      const result = await getIMGatewayManager().weixinQrLoginStart();
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Failed to start Weixin QR login' };
+    }
+  });
+
+  ipcMain.handle('im:weixin:qr-login-wait', async (_event, accountId?: string) => {
+    try {
+      const result = await getIMGatewayManager().weixinQrLoginWait(accountId);
+      if (result.connected) {
+        // Restart gateway so the plugin picks up the new token and starts
+        // a fresh monitor loop (the old one may be stuck in a session pause).
+        console.log('[IMGatewayManager] Weixin login succeeded, restarting OpenClaw gateway');
+        await getOpenClawEngineManager().restartGateway();
+      }
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, connected: false, message: error instanceof Error ? error.message : 'Weixin QR login failed' };
     }
   });
 
@@ -2973,6 +3072,31 @@ if (!gotTheLock) {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to reject pairing request',
       };
+    }
+  });
+
+  // Feishu bot install helpers
+  ipcMain.handle('feishu:install:qrcode', async (_event, { isLark }: { isLark: boolean }) => {
+    try {
+      return await getIMGatewayManager().startFeishuInstallQrcode(isLark);
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : '获取二维码失败');
+    }
+  });
+
+  ipcMain.handle('feishu:install:poll', async (_event, { deviceCode }: { deviceCode: string }) => {
+    try {
+      return await getIMGatewayManager().pollFeishuInstall(deviceCode);
+    } catch (error) {
+      return { done: false, error: error instanceof Error ? error.message : '轮询失败' };
+    }
+  });
+
+  ipcMain.handle('feishu:install:verify', async (_event, { appId, appSecret }: { appId: string; appSecret: string }) => {
+    try {
+      return await getIMGatewayManager().verifyFeishuCredentials(appId, appSecret);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '验证失败' };
     }
   });
 
@@ -3772,7 +3896,14 @@ if (!gotTheLock) {
       console.error('[OpenClaw] Startup config sync failed:', startupSync.error);
     }
     if (resolveCoworkAgentEngine() === 'openclaw') {
-      void ensureOpenClawRunningForCowork().catch((error) => {
+      void ensureOpenClawRunningForCowork().then(() => {
+        // Start cron polling once the gateway is confirmed running.
+        try {
+          getCronJobService().startPolling();
+        } catch (err) {
+          console.warn('[Main] CronJobService not available after OpenClaw startup:', err);
+        }
+      }).catch((error) => {
         console.error('[OpenClaw] Failed to auto-start gateway on app startup:', error);
       });
     }
