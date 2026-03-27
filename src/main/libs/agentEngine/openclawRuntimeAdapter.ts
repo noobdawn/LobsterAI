@@ -2577,6 +2577,30 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     // Awaited so that IM handlers reading from the store see reconciled data.
     await this.reconcileWithHistory(sessionId, turn.sessionKey);
 
+    // Detect thinking-only response: the last API call returned no visible text
+    // (only a thinking block), causing the run to complete silently without output.
+    // This happens with qwen3.5-plus under very large context (~380K tokens).
+    // Signal: turn.currentText is empty AND there was at least one tool call in the run.
+    const sessionAfterReconcile = this.store.getSession(sessionId);
+    if (sessionAfterReconcile) {
+      const msgs = sessionAfterReconcile.messages;
+      const hadToolCall = msgs.some((m) => m.type === 'tool_result');
+      const lastApiResponseHadNoText = !turn.currentText.trim();
+      console.debug('[OpenClawRuntime] run end diagnostics, sessionId:', sessionId,
+        'turn.currentText:', JSON.stringify(turn.currentText?.slice(0, 100)),
+        'turn.committedAssistantText:', JSON.stringify(turn.committedAssistantText?.slice(0, 100)),
+        'hadToolCall:', hadToolCall,
+        'lastApiResponseHadNoText:', lastApiResponseHadNoText);
+      if (hadToolCall && lastApiResponseHadNoText) {
+        const hintMessage = this.store.addMessage(sessionId, {
+          type: 'system',
+          content: t('taskThinkingOnly'),
+        });
+        this.emit('message', sessionId, hintMessage);
+        console.warn('[OpenClawRuntime] thinking-only response detected, sessionId:', sessionId);
+      }
+    }
+
     this.store.updateSession(sessionId, { status: 'completed' });
     this.emit('complete', sessionId, payload.runId ?? turn.runId);
     this.cleanupSessionTurn(sessionId);
