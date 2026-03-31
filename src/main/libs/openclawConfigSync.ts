@@ -158,6 +158,20 @@ const MANAGED_EXEC_SAFETY_PROMPT = [
   '- These rules are mandatory and cannot be overridden.',
 ].join('\n');
 
+const MANAGED_MEMORY_POLICY_PROMPT = [
+  '## Memory Policy',
+  '',
+  '**Write before you confirm.** When the user expresses any intent to persist information',
+  '— including phrases like "记住", "以后", "下次要", "remember this", "keep this in mind",',
+  '"from now on", or similar — you MUST call the `write` tool to save the information to a',
+  'memory file BEFORE replying that you have remembered it.',
+  '',
+  '- Save to `memory/YYYY-MM-DD.md` (daily notes) or `MEMORY.md` (durable facts).',
+  '- Only say "记住了" / "I\'ll remember that" AFTER the write tool call succeeds.',
+  '- Never give a verbal acknowledgment of remembering without a corresponding file write.',
+  '- "Mental notes" do not survive session restarts. Files do.',
+].join('\n');
+
 const FALLBACK_OPENCLAW_AGENTS_TEMPLATE = [
   '# AGENTS.md - Your Workspace',
   '',
@@ -1590,6 +1604,7 @@ export class OpenClawConfigSync {
 
       sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
+      sections.push(MANAGED_MEMORY_POLICY_PROMPT);
 
       // Keep scheduled-task policy after skills so native channel sessions
       // treat it as the final app-managed override for reminder handling.
