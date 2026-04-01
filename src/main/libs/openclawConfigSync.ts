@@ -7,6 +7,7 @@ import type { DingTalkOpenClawConfig, FeishuOpenClawConfig, QQOpenClawConfig, We
 import { PlatformRegistry } from '../../shared/platform';
 import { ProviderName, OpenClawProviderId, OpenClawApi as OpenClawApiConst } from '../../shared/providers';
 import { resolveRawApiConfig, resolveAllProviderApiKeys, resolveAllEnabledProviderConfigs, getAllServerModelMetadata } from './claudeSettings';
+import { getCoworkOpenAICompatProxyBaseURL } from './coworkOpenAICompatProxy';
 import type { OpenClawEngineManager } from './openclawEngineManager';
 import { parseChannelSessionKey } from './openclawChannelSessionSync';
 import type { McpToolManifestEntry } from './mcpServerManager';
@@ -386,6 +387,17 @@ type ProviderDescriptor = {
   normalizeBaseUrl: (rawBaseUrl: string) => string;
   resolveApiKey?: (ctx: { apiKey: string; providerName: string }) => string;
   resolveSessionModelId?: (modelId: string) => string;
+  /**
+   * 动态计算 baseUrl，完全覆盖 normalizeBaseUrl 的结果。
+   * 用于 baseUrl 由运行时环境决定（如代理端口）而非用户配置的场景。
+   * 返回 null 表示降级使用 normalizeBaseUrl。
+   */
+  resolveRuntimeBaseUrl?: () => string | null;
+  /**
+   * 基于 modelId 动态计算 reasoning 标志。
+   * 优先级高于 modelDefaults.reasoning。
+   */
+  resolveModelReasoning?: (modelId: string, codingPlanEnabled: boolean) => boolean | undefined;
   modelDefaults?: Partial<{
     reasoning: boolean;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -427,6 +439,8 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     providerId: OpenClawProviderId.Moonshot,
     resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
     normalizeBaseUrl: normalizeMoonshotBaseUrl,
+    resolveModelReasoning: (modelId, codingPlanEnabled) =>
+      codingPlanEnabled ? undefined : modelId.includes('thinking'),
     modelDefaults: {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 256000,
@@ -523,6 +537,17 @@ const PROVIDER_REGISTRY: Record<string, ProviderDescriptor> = {
     resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
     normalizeBaseUrl: stripChatCompletionsSuffix,
   },
+
+  [ProviderName.Copilot]: {
+    providerId: OpenClawProviderId.LobsteraiCopilot,
+    resolveApi: () => OpenClawApiConst.OpenAICompletions as OpenClawProviderApi,
+    normalizeBaseUrl: stripChatCompletionsSuffix,
+    resolveRuntimeBaseUrl: () => {
+      const proxyBase = getCoworkOpenAICompatProxyBaseURL('local');
+      return proxyBase ? `${proxyBase}/v1/copilot` : null;
+    },
+    resolveApiKey: () => 'copilot-via-proxy',
+  },
 };
 
 const DEFAULT_DESCRIPTOR: ProviderDescriptor = {
@@ -563,7 +588,7 @@ export const buildProviderSelection = (options: {
   const providerName = options.providerName ?? '';
   const descriptor = resolveDescriptor(providerName, !!options.codingPlanEnabled);
 
-  const baseUrl = descriptor.normalizeBaseUrl(options.baseURL);
+  const baseUrl = descriptor.resolveRuntimeBaseUrl?.() ?? descriptor.normalizeBaseUrl(options.baseURL);
   const api = descriptor.resolveApi({
     apiType: options.apiType,
     baseURL: options.baseURL,
@@ -578,11 +603,10 @@ export const buildProviderSelection = (options: {
   const providerModelName = resolveModelDisplayName(sessionModelId, options.modelName);
   const modelInput: string[] = options.supportsImage ? ['text', 'image'] : ['text'];
 
-  // moonshot reasoning depends on modelId containing 'thinking'
-  const dynamicReasoning =
-    providerName === ProviderName.Moonshot && !options.codingPlanEnabled
-      ? options.modelId.includes('thinking')
-      : undefined;
+  // reasoning：descriptor 动态计算 > modelDefaults 静态值
+  const reasoning = descriptor.resolveModelReasoning
+    ? descriptor.resolveModelReasoning(options.modelId, !!options.codingPlanEnabled)
+    : descriptor.modelDefaults?.reasoning;
 
   return {
     providerId: descriptor.providerId,
@@ -600,11 +624,7 @@ export const buildProviderSelection = (options: {
           name: providerModelName,
           api,
           input: modelInput,
-          ...(dynamicReasoning !== undefined
-            ? { reasoning: dynamicReasoning }
-            : descriptor.modelDefaults?.reasoning !== undefined
-              ? { reasoning: descriptor.modelDefaults.reasoning }
-              : {}),
+          ...(reasoning !== undefined ? { reasoning } : {}),
           ...(descriptor.modelDefaults?.cost
             ? { cost: descriptor.modelDefaults.cost }
             : {}),

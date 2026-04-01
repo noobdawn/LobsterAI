@@ -7,8 +7,6 @@ export interface AppConfig {
     key: string;
     baseUrl: string;
   };
-  // 自定义模型提供商递增 ID 计数器（单调递增，删除后不复用）
-  customProviderNextId?: number;
   // 模型配置
   model: {
     availableModels: Array<{
@@ -190,7 +188,29 @@ export interface AppConfig {
         supportsImage?: boolean;
       }>;
     };
+    'github-copilot': {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
     ollama: {
+      enabled: boolean;
+      apiKey: string;
+      baseUrl: string;
+      apiFormat?: 'anthropic' | 'openai' | 'gemini';
+      models?: Array<{
+        id: string;
+        name: string;
+        supportsImage?: boolean;
+      }>;
+    };
+    custom: {
       enabled: boolean;
       apiKey: string;
       baseUrl: string;
@@ -218,7 +238,6 @@ export interface AppConfig {
       authType?: 'apikey' | 'oauth';
       oauthRefreshToken?: string;
       oauthTokenExpiresAt?: number;
-      displayName?: string;
       models?: Array<{
         id: string;
         name: string;
@@ -249,12 +268,6 @@ export interface AppConfig {
   };
 }
 
-/**
- * Build default provider configs from the shared registry.
- * Each provider gets: enabled=false, empty apiKey, default baseUrl/apiFormat/models.
- * Providers with codingPlan support also get codingPlanEnabled=false.
- * The 'custom' provider is not in the registry and is hardcoded separately.
- */
 const buildDefaultProviders = (): AppConfig['providers'] => {
   const providers: Record<string, {
     enabled: boolean;

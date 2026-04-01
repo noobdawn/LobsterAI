@@ -473,4 +473,36 @@ contextBridge.exposeInMainWorld('electron', {
         }>,
     },
   },
+  githubCopilot: {
+    requestDeviceCode: () =>
+      ipcRenderer.invoke('github-copilot:request-device-code') as Promise<{
+        userCode: string;
+        verificationUri: string;
+        deviceCode: string;
+        interval: number;
+        expiresIn: number;
+      }>,
+    pollForToken: (deviceCode: string, interval: number, expiresIn: number) =>
+      ipcRenderer.invoke('github-copilot:poll-for-token', { deviceCode, interval, expiresIn }) as Promise<{
+        success: boolean;
+        token?: string;
+        githubUser?: string;
+        baseUrl?: string;
+        error?: string;
+      }>,
+    cancelPolling: () => ipcRenderer.invoke('github-copilot:cancel-polling') as Promise<void>,
+    signOut: () => ipcRenderer.invoke('github-copilot:sign-out') as Promise<void>,
+    refreshToken: () =>
+      ipcRenderer.invoke('github-copilot:refresh-token') as Promise<{
+        success: boolean;
+        token?: string;
+        baseUrl?: string;
+        error?: string;
+      }>,
+    onTokenUpdated: (callback: (data: { token: string; baseUrl: string }) => void) => {
+      const handler = (_event: unknown, data: { token: string; baseUrl: string }) => callback(data);
+      ipcRenderer.on('github-copilot:token-updated', handler);
+      return () => ipcRenderer.removeListener('github-copilot:token-updated', handler);
+    },
+  },
 });

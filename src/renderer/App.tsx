@@ -167,6 +167,7 @@ const App: React.FC = () => {
         setIsInitialized(true);
         console.info('[App] initializeApp: shell ready');
 
+
         // 初始化定时任务服务，但不阻塞首屏
         void waitWithTimeout(scheduledTaskService.init(), 5000, 'scheduledTaskService.init').catch((error) => {
           console.error('[App] initializeApp: scheduledTaskService.init failed:', error);
@@ -189,6 +190,28 @@ const App: React.FC = () => {
     return () => {
       unsubscribe();
     };
+  }, []);
+
+  // Listen for Copilot token auto-refresh events from the main process
+  useEffect(() => {
+    const removeListener = window.electron.githubCopilot.onTokenUpdated(({ token, baseUrl }) => {
+      console.log('[App] received Copilot token update from main process');
+      const currentConfig = configService.getConfig();
+      const copilotProvider = currentConfig.providers?.['github-copilot'];
+      if (copilotProvider) {
+        void configService.updateConfig({
+          providers: {
+            ...currentConfig.providers,
+            'github-copilot': {
+              ...copilotProvider,
+              apiKey: token,
+              ...(baseUrl ? { baseUrl } : {}),
+            },
+          },
+        } as Partial<typeof currentConfig>);
+      }
+    });
+    return removeListener;
   }, []);
 
   // Network status monitoring

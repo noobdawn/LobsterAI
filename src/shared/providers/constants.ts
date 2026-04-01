@@ -39,6 +39,7 @@ export const ProviderName = {
   Ollama: 'ollama',
   Custom: 'custom',
   LobsteraiServer: 'lobsterai-server',
+  Copilot: 'github-copilot',
 } as const;
 export type ProviderName = typeof ProviderName[keyof typeof ProviderName];
 
@@ -61,8 +62,10 @@ export const OpenClawProviderId = {
   StepFun: 'stepfun',
   Xiaomi: 'xiaomi',
   OpenRouter: 'openrouter',
+  Copilot: 'github-copilot',
+  LobsteraiCopilot: 'lobsterai-copilot',
   Ollama: 'ollama',
-  Lobster: 'lobster', // Fallback ID for unknown providers
+  Lobster: 'lobster',
 } as const;
 export type OpenClawProviderId = typeof OpenClawProviderId[keyof typeof OpenClawProviderId];
 
@@ -316,6 +319,22 @@ const PROVIDER_DEFINITIONS = [
     ],
   },
   // ── Global ──
+  {
+    id: ProviderName.Copilot,
+    defaultBaseUrl: 'https://api.individual.githubcopilot.com',
+    defaultApiFormat: ApiFormat.OpenAI,
+    codingPlanSupported: false,
+    region: 'global',
+    enPriority: 0,
+    defaultModels: [
+      { id: 'gpt-5-mini', name: 'GPT-5-mini', supportsImage: true },
+      { id: 'claude-haiku-4.5', name: 'Claude Haiku 4.5', supportsImage: true },
+      { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6', supportsImage: true },
+      { id: 'claude-sonnet-4.5', name: 'Claude Sonnet 4.5', supportsImage: true },
+      { id: 'gpt-4o', name: 'GPT-4o', supportsImage: true },
+      { id: 'o3-mini', name: 'o3-mini', supportsImage: false },
+    ],
+  },
   {
     id: ProviderName.OpenAI,
     defaultBaseUrl: 'https://api.openai.com/v1',

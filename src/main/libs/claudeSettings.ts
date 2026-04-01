@@ -123,7 +123,7 @@ type MatchedProvider = {
 };
 
 function getEffectiveProviderApiFormat(providerName: string, apiFormat: unknown): AnthropicApiFormat {
-  if (providerName === ProviderName.OpenAI || providerName === ProviderName.Gemini || providerName === ProviderName.StepFun || providerName === ProviderName.Youdaozhiyun) {
+  if (providerName === ProviderName.OpenAI || providerName === ProviderName.Gemini || providerName === ProviderName.StepFun || providerName === ProviderName.Youdaozhiyun || providerName === ProviderName.Copilot) {
     return 'openai';
   }
   if (providerName === ProviderName.Anthropic) {
@@ -579,3 +579,14 @@ export function resolveAllEnabledProviderConfigs(): ProviderRawConfig[] {
   return result;
 }
 
+/**
+ * Returns the long-lived GitHub OAuth token used by OpenClaw's built-in
+ * github-copilot provider to exchange for short-lived Copilot API tokens.
+ * OpenClaw reads this from the COPILOT_GITHUB_TOKEN env var.
+ */
+export function getCopilotGithubToken(): string | null {
+  const sqliteStore = getStore();
+  if (!sqliteStore) return null;
+  const token = sqliteStore.get<string>('github_copilot_github_token');
+  return token?.trim() || null;
+}
