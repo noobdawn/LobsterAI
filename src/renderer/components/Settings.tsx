@@ -416,6 +416,15 @@ const formatShortcutFromEvent = (e: React.KeyboardEvent): string | null => {
   return parts.join('+');
 };
 
+const SEND_SHORTCUT_OPTIONS = [
+  { value: 'Enter', label: 'Enter', labelMac: 'Enter' },
+  { value: 'Shift+Enter', label: 'Shift+Enter', labelMac: 'Shift+Enter' },
+  { value: 'Ctrl+Enter', label: 'Ctrl+Enter', labelMac: 'Cmd+Enter' },
+  { value: 'Alt+Enter', label: 'Alt+Enter', labelMac: 'Option+Enter' },
+] as const;
+
+const isMacPlatform = navigator.platform.includes('Mac');
+
 const ShortcutRecorder: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
   const [recording, setRecording] = useState(false);
   const divRef = useRef<HTMLDivElement>(null);
@@ -455,6 +464,65 @@ const ShortcutRecorder: React.FC<{ value: string; onChange: (v: string) => void 
         }`}
     >
       {value || i18nService.t('shortcutNotSet')}
+    </div>
+  );
+};
+
+const SendShortcutSelect: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const currentLabel = (() => {
+    const opt = SEND_SHORTCUT_OPTIONS.find(o => o.value === value);
+    if (!opt) return value;
+    return isMacPlatform ? opt.labelMac : opt.label;
+  })();
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div
+        onClick={() => setOpen(!open)}
+        className={`w-36 rounded-xl border px-3 py-1.5 text-sm cursor-pointer select-none text-center outline-none transition-colors
+          dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset dark:text-claude-darkText text-claude-text
+          ${open
+            ? 'border-claude-accent ring-1 ring-claude-accent/30'
+            : 'dark:border-claude-darkBorder border-claude-border hover:border-claude-accent/50'
+          }`}
+      >
+        {currentLabel}
+      </div>
+      {open && (
+        <div className="absolute right-0 mt-1 z-50 min-w-[160px] rounded-xl border dark:border-claude-darkBorder border-claude-border dark:bg-claude-darkSurfaceInset bg-claude-surfaceInset shadow-elevated py-1">
+          {SEND_SHORTCUT_OPTIONS.map((option) => {
+            const label = isMacPlatform ? option.labelMac : option.label;
+            const isActive = value === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => { onChange(option.value); setOpen(false); }}
+                className={`flex items-center justify-between w-full px-3 py-1.5 text-sm transition-colors
+                  ${isActive
+                    ? 'dark:text-claude-accent text-claude-accent font-medium'
+                    : 'dark:text-claude-darkText text-claude-text'
+                  } hover:bg-claude-accent/10`}
+              >
+                <span>{label}</span>
+                {isActive && <span className="text-claude-accent">✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -510,6 +578,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     newChat: 'Ctrl+N',
     search: 'Ctrl+F',
     settings: 'Ctrl+,',
+    sendMessage: defaultConfig.shortcuts!.sendMessage,
   });
 
   // State for model editing
@@ -1595,8 +1664,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
     setActiveTab(tab);
   };
 
+  // Mapping from shortcut key to i18n label key for conflict messages
+  const shortcutLabelMap: Record<string, string> = {
+    newChat: 'newChat',
+    search: 'search',
+    settings: 'openSettings',
+    sendMessage: 'sendMessageShortcut',
+  };
+
   // 快捷键更新处理
   const handleShortcutChange = (key: keyof typeof shortcuts, value: string) => {
+    // Check for conflicts with other shortcuts
+    const conflictKey = Object.keys(shortcuts).find(
+      k => k !== key && shortcuts[k as keyof typeof shortcuts] === value
+    );
+    if (conflictKey) {
+      const conflictLabel = i18nService.t(shortcutLabelMap[conflictKey] ?? conflictKey);
+      setNoticeMessage(
+        i18nService.t('shortcutConflict').replace('{0}', value).replace('{1}', conflictLabel)
+      );
+      return;
+    }
     setShortcuts(prev => ({
       ...prev,
       [key]: value
@@ -3444,6 +3532,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-foreground">{i18nService.t('openSettings')}</span>
                   <ShortcutRecorder value={shortcuts.settings} onChange={(v) => handleShortcutChange('settings', v)} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-foreground">{i18nService.t('sendMessageShortcut')}</span>
+                  <SendShortcutSelect
+                    value={shortcuts.sendMessage}
+                    onChange={(v) => handleShortcutChange('sendMessage', v)}
+                  />
                 </div>
               </div>
             </div>
