@@ -444,6 +444,58 @@ const resolveGitCommand = (): { command: string; env?: NodeJS.ProcessEnv } => {
   return { command: gitExe, env };
 };
 
+/**
+ * On Windows, ensure a Node.js --require init script that monkey-patches
+ * child_process so all descendant processes inherit windowsHide: true.
+ * Returns the script path, or null on non-Windows / failure.
+ */
+const WINDOWS_HIDE_SCRIPT = [
+  "'use strict';",
+  'if (process.platform === "win32") {',
+  '  const cp = require("child_process");',
+  '  const hide = (o) => {',
+  '    if (o == null) return { windowsHide: true };',
+  '    if (typeof o !== "object") return o;',
+  '    if (Object.prototype.hasOwnProperty.call(o, "windowsHide")) return o;',
+  '    return { ...o, windowsHide: true };',
+  '  };',
+  '  for (const fn of ["spawn", "spawnSync", "exec", "execFile", "fork"]) {',
+  '    const orig = cp[fn];',
+  '    if (typeof orig !== "function") continue;',
+  '    cp[fn] = function (...a) {',
+  '      const optsIdx = fn === "exec" ? 1 : fn === "fork" || fn === "spawn" || fn === "spawnSync" || fn === "execFile" ? 2 : 1;',
+  '      if (a.length > optsIdx && typeof a[optsIdx] === "object" && a[optsIdx] !== null) {',
+  '        a[optsIdx] = hide(a[optsIdx]);',
+  '      } else if (a.length === optsIdx) {',
+  '        a.push(hide(undefined));',
+  '      }',
+  '      return orig.apply(this, a);',
+  '    };',
+  '  }',
+  '}',
+].join('\n');
+
+let _windowsHideScriptPath: string | null | undefined;
+
+const ensureWindowsHideScript = (): string | null => {
+  if (process.platform !== 'win32') return null;
+  if (_windowsHideScriptPath !== undefined) return _windowsHideScriptPath;
+  try {
+    const dir = path.join(app.getPath('userData'), 'bin');
+    fs.mkdirSync(dir, { recursive: true });
+    const scriptPath = path.join(dir, 'skill_windows_hide.cjs');
+    const existing = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf8') : '';
+    if (existing !== WINDOWS_HIDE_SCRIPT) {
+      fs.writeFileSync(scriptPath, WINDOWS_HIDE_SCRIPT, 'utf8');
+    }
+    _windowsHideScriptPath = scriptPath;
+    return scriptPath;
+  } catch {
+    _windowsHideScriptPath = null;
+    return null;
+  }
+};
+
 const runCommand = (
   command: string,
   args: string[],
@@ -875,6 +927,11 @@ const downloadClawhubSkill = async (
     console.log(`[downloadClawhubSkill] using bundled npx: electron="${electronPath}", npxCliJs="${npxCliJs}"`);
     command = electronPath;
     args = [npxCliJs, 'clawhub@latest', 'install', skillName, '--dir', targetDir, '--no-input', '--force'];
+    // Inject --require script to hide CMD windows from all descendant processes
+    const hideScript = ensureWindowsHideScript();
+    if (hideScript) {
+      args = ['--require', hideScript, ...args];
+    }
   } else {
     const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
     console.log(`[downloadClawhubSkill] bundled npx not found, falling back to system "${npxCommand}"`);
