@@ -3636,6 +3636,25 @@ if (!gotTheLock) {
     }
   });
 
+  // POPO QR login
+  ipcMain.handle('im:popo:qr-login-start', async () => {
+    try {
+      const result = getIMGatewayManager().popoQrLoginStart();
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Failed to start POPO QR login' };
+    }
+  });
+
+  ipcMain.handle('im:popo:qr-login-poll', async (_event, taskToken: string) => {
+    try {
+      const result = await getIMGatewayManager().popoQrLoginPoll(taskToken);
+      return result;
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'POPO QR login poll failed' };
+    }
+  });
+
   ipcMain.handle('im:status:get', async () => {
     try {
       const status = getIMGatewayManager().getStatus();

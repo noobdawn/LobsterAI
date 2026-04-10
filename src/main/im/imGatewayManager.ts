@@ -1513,6 +1513,89 @@ export class IMGatewayManager extends EventEmitter {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // POPO QR code login (direct HTTP polling, no OpenClaw gateway RPC)
+  // ---------------------------------------------------------------------------
+
+  private static readonly POPO_QRCODE_BASE_URL =
+    'https://f2e.popo.netease.com/polymers/lobster-bot-h5/?pp_htb=1&pp_back_type=cross&taskToken=';
+  private static readonly POPO_POLLING_API =
+    'https://open.popo.netease.com/open-apis/no-auth/openclaw/v1/polling';
+  private static readonly POPO_COMPLETE_API =
+    'https://open.popo.netease.com/open-apis/no-auth/openclaw/v1/completed';
+  private static readonly POPO_POLLING_INTERVAL_MS = 5_000;
+  private static readonly POPO_POLLING_TIMEOUT_MS = 10 * 60_000;
+
+  /**
+   * Start POPO QR code login: generate a taskToken and return the QR URL.
+   */
+  popoQrLoginStart(): { qrUrl: string; taskToken: string; timeoutMs: number } {
+    const { randomUUID } = require('crypto') as typeof import('crypto');
+    const taskToken = randomUUID();
+    const timeout = Date.now() + IMGatewayManager.POPO_POLLING_TIMEOUT_MS;
+    const qrUrl = `${IMGatewayManager.POPO_QRCODE_BASE_URL}${taskToken}&timeout=${timeout}`;
+    console.log('[IMGatewayManager] POPO QR login started, taskToken:', taskToken);
+    return { qrUrl, taskToken, timeoutMs: IMGatewayManager.POPO_POLLING_TIMEOUT_MS };
+  }
+
+  /**
+   * Poll POPO backend for QR scan result. Blocks until credentials are returned or timeout.
+   * Returns { success, appKey, appSecret, aesKey } on success.
+   */
+  async popoQrLoginPoll(taskToken: string): Promise<{
+    success: boolean;
+    appKey?: string;
+    appSecret?: string;
+    aesKey?: string;
+    message: string;
+  }> {
+    const deadline = Date.now() + IMGatewayManager.POPO_POLLING_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      try {
+        const url = `${IMGatewayManager.POPO_POLLING_API}?taskToken=${taskToken}`;
+        const resp = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(8_000),
+        });
+        if (resp.ok) {
+          const data = await resp.json() as {
+            data?: { status?: string; result?: { appKey?: string; appSecret?: string; aesKey?: string } };
+          };
+          if (data?.data?.status === 'CREATED' && data.data.result) {
+            const { appKey, appSecret, aesKey } = data.data.result;
+            if (appKey && appSecret && aesKey) {
+              console.log('[IMGatewayManager] POPO QR login got credentials');
+              // Notify server that setup is complete (best-effort)
+              void this.popoQrNotifyComplete(taskToken);
+              return { success: true, appKey, appSecret, aesKey, message: 'POPO 机器人绑定成功！' };
+            }
+          }
+        }
+      } catch {
+        // Ignore individual poll errors, keep trying
+      }
+      await new Promise(r => setTimeout(r, IMGatewayManager.POPO_POLLING_INTERVAL_MS));
+    }
+
+    console.warn('[IMGatewayManager] POPO QR login poll timed out');
+    return { success: false, message: '扫码超时，请重试。' };
+  }
+
+  private async popoQrNotifyComplete(taskToken: string): Promise<void> {
+    try {
+      const url = `${IMGatewayManager.POPO_COMPLETE_API}?taskToken=${taskToken}`;
+      await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch {
+      console.warn('[IMGatewayManager] POPO QR notify complete failed (non-critical)');
+    }
+  }
+
   private async testNimOpenClawConnectivity(
     configOverride?: Partial<IMGatewayConfig>
   ): Promise<IMConnectivityTestResult> {

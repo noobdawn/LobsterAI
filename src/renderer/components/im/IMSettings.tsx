@@ -129,6 +129,11 @@ const IMSettings: React.FC = () => {
   const [weixinQrUrl, setWeixinQrUrl] = useState<string>('');
   const [weixinQrError, setWeixinQrError] = useState<string>('');
   const weixinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // POPO QR login state
+  const [popoQrStatus, setPopoQrStatus] = useState<'idle' | 'loading' | 'showing' | 'waiting' | 'success' | 'error'>('idle');
+  const [popoQrUrl, setPopoQrUrl] = useState<string>('');
+  const [popoQrError, setPopoQrError] = useState<string>('');
+  const popoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [localIp, setLocalIp] = useState<string>('');
   const isMountedRef = useRef(true);
 
@@ -257,6 +262,16 @@ const IMSettings: React.FC = () => {
       setWeixinQrStatus('idle');
       setWeixinQrUrl('');
       setWeixinQrError('');
+    }
+  }, [activePlatform]);
+
+  // Reset popo QR login state when switching away from popo
+  useEffect(() => {
+    if (activePlatform !== 'popo') {
+      if (popoTimerRef.current) { clearTimeout(popoTimerRef.current); popoTimerRef.current = null; }
+      setPopoQrStatus('idle');
+      setPopoQrUrl('');
+      setPopoQrError('');
     }
   }, [activePlatform]);
 
@@ -500,6 +515,65 @@ const IMSettings: React.FC = () => {
       if (!isMountedRef.current) return;
       setWeixinQrStatus('error');
       setWeixinQrError(String(err));
+    }
+  };
+
+  const handlePopoQrLogin = async () => {
+    setPopoQrStatus('loading');
+    setPopoQrError('');
+    try {
+      const startResult = await window.electron.im.popoQrLoginStart();
+      if (!isMountedRef.current) return;
+
+      if (!startResult.success || !startResult.qrUrl) {
+        setPopoQrStatus('error');
+        setPopoQrError(startResult.message || i18nService.t('imPopoQrFailed'));
+        return;
+      }
+
+      setPopoQrUrl(startResult.qrUrl);
+      setPopoQrStatus('showing');
+
+      // QR expires in ~10 minutes
+      if (popoTimerRef.current) clearTimeout(popoTimerRef.current);
+      popoTimerRef.current = setTimeout(() => {
+        if (!isMountedRef.current) return;
+        setPopoQrStatus('error');
+        setPopoQrError(i18nService.t('imPopoQrExpired'));
+      }, startResult.timeoutMs || 600000);
+
+      // Start polling for scan result
+      setPopoQrStatus('waiting');
+      const pollResult = await window.electron.im.popoQrLoginPoll(startResult.taskToken!);
+      if (popoTimerRef.current) { clearTimeout(popoTimerRef.current); popoTimerRef.current = null; }
+      if (!isMountedRef.current) return;
+
+      if (pollResult.success && pollResult.appKey && pollResult.appSecret && pollResult.aesKey) {
+        setPopoQrStatus('success');
+        // Auto-fill credentials and enable
+        const update: Partial<PopoOpenClawConfig> = {
+          appKey: pollResult.appKey,
+          appSecret: pollResult.appSecret,
+          aesKey: pollResult.aesKey,
+          connectionMode: 'websocket',
+          enabled: true,
+        };
+        handlePopoChange(update);
+        dispatch(clearError());
+        // Persist to DB with gateway sync so openclaw.json gets updated and gateway restarts
+        await imService.updateConfig({ popo: { ...popoConfig, ...update } });
+        // Explicitly trigger config sync to ensure openclaw.json is written immediately
+        await window.electron.im.syncConfig();
+        await imService.loadStatus();
+      } else {
+        setPopoQrStatus('error');
+        setPopoQrError(pollResult.message || i18nService.t('imPopoQrFailed'));
+      }
+    } catch (err) {
+      if (popoTimerRef.current) { clearTimeout(popoTimerRef.current); popoTimerRef.current = null; }
+      if (!isMountedRef.current) return;
+      setPopoQrStatus('error');
+      setPopoQrError(String(err));
     }
   };
 
@@ -770,11 +844,7 @@ const IMSettings: React.FC = () => {
       return true; // No credentials needed, connects via QR code in CLI
     }
     if (platform === 'popo') {
-      const effectiveMode = config.popo.connectionMode || (config.popo.token ? 'webhook' : 'websocket');
-      if (effectiveMode === 'webhook') {
-        return !!(config.popo.appKey && config.popo.appSecret && config.popo.token && config.popo.aesKey);
-      }
-      return !!(config.popo.appKey && config.popo.appSecret && config.popo.aesKey);
+      return true; // Credentials provisioned via QR scan or manual input in openclaw.json
     }
     return config.feishu.instances?.some(i => !!(i.appId && i.appSecret));
   };
@@ -2717,6 +2787,61 @@ const IMSettings: React.FC = () => {
 
         {activePlatform === 'popo' && (
           <div className="space-y-3">
+            {/* Scan QR code section */}
+            <div className="rounded-lg border border-dashed border-border-subtle p-4 text-center space-y-3">
+              {(popoQrStatus === 'idle' || popoQrStatus === 'error') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handlePopoQrLogin()}
+                    className="px-4 py-2.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {i18nService.t('imPopoScanBtn')}
+                  </button>
+                  <p className="text-xs text-secondary">
+                    {i18nService.t('imPopoScanHint')}
+                  </p>
+                  {popoQrStatus === 'error' && popoQrError && (
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-red-500 bg-red-500/10 px-3 py-2 rounded-lg">
+                      <XCircleIcon className="h-4 w-4 flex-shrink-0" />
+                      {popoQrError}
+                    </div>
+                  )}
+                </>
+              )}
+              {popoQrStatus === 'loading' && (
+                <div className="flex items-center justify-center gap-2 py-4">
+                  <ArrowPathIcon className="h-5 w-5 animate-spin text-primary" />
+                  <span className="text-sm text-secondary">
+                    {i18nService.t('imPopoQrLoading')}
+                  </span>
+                </div>
+              )}
+              {(popoQrStatus === 'showing' || popoQrStatus === 'waiting') && popoQrUrl && (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-foreground">
+                    {i18nService.t('imPopoQrScanPrompt')}
+                  </p>
+                  <div className="flex justify-center">
+                    <div className="p-3 bg-white rounded-lg border border-border-subtle">
+                      <QRCodeSVG value={popoQrUrl} size={192} />
+                    </div>
+                  </div>
+                  {popoQrStatus === 'waiting' && (
+                    <p className="text-xs text-secondary animate-pulse">
+                      {i18nService.t('imPopoQrWaiting')}
+                    </p>
+                  )}
+                </div>
+              )}
+              {popoQrStatus === 'success' && (
+                <div className="flex items-center justify-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
+                  {i18nService.t('imPopoQrSuccess')}
+                </div>
+              )}
+            </div>
+
             {/* Platform Guide */}
             <PlatformGuide
               steps={[
@@ -2727,136 +2852,11 @@ const IMSettings: React.FC = () => {
                 guideUrl={PlatformRegistry.guideUrl('popo')}
             />
 
-            {/* Connection Mode selector */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">
-                {i18nService.t('imPopoConnectionMode')}
-              </label>
-              <select
-                value={popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')}
-                onChange={(e) => {
-                  const update = { connectionMode: e.target.value as PopoOpenClawConfig['connectionMode'] };
-                  handlePopoChange(update);
-                  void handleSavePopoConfig(update);
-                }}
-                className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
-              >
-                <option value="websocket">{i18nService.t('imPopoConnectionModeWebsocket')}</option>
-                <option value="webhook">{i18nService.t('imPopoConnectionModeWebhook')}</option>
-              </select>
-            </div>
-
-            {/* Credential hint */}
-            <p className="text-xs text-secondary">
-              {i18nService.t('imPopoCredentialHint')}
-            </p>
-
-            {/* AppKey input */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">AppKey</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={popoConfig.appKey}
-                  onChange={(e) => handlePopoChange({ appKey: e.target.value })}
-                  onBlur={() => void handleSavePopoConfig()}
-                  placeholder="AppKey"
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
-                />
-                {popoConfig.appKey && (
-                  <div className="absolute right-2 inset-y-0 flex items-center">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        handlePopoChange({ appKey: '' });
-                        void handleSavePopoConfig({ appKey: '' });
-                      }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
+            {/* Bound status badge */}
+            {popoConfig.appKey && (
+              <div className="text-xs text-green-600 dark:text-green-400 bg-green-500/10 px-3 py-2 rounded-lg">
+                AppKey: {popoConfig.appKey}
               </div>
-            </div>
-
-            {/* AppSecret input */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">AppSecret</label>
-              <div className="relative">
-                <input
-                  type={showSecrets['popo.appSecret'] ? 'text' : 'password'}
-                  value={popoConfig.appSecret}
-                  onChange={(e) => handlePopoChange({ appSecret: e.target.value })}
-                  onBlur={() => void handleSavePopoConfig()}
-                  placeholder="••••••••••••"
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
-                />
-                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {popoConfig.appSecret && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        handlePopoChange({ appSecret: '' });
-                        void handleSavePopoConfig({ appSecret: '' });
-                      }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.appSecret': !prev['popo.appSecret'] }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['popo.appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
-                  >
-                    {showSecrets['popo.appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Token input (webhook mode only) */}
-            {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
-            <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-secondary">Token</label>
-              <div className="relative">
-                <input
-                  type={showSecrets['popo.token'] ? 'text' : 'password'}
-                  value={popoConfig.token}
-                  onChange={(e) => handlePopoChange({ token: e.target.value })}
-                  onBlur={() => void handleSavePopoConfig()}
-                  placeholder="••••••••••••"
-                  className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
-                />
-                <div className="absolute right-2 inset-y-0 flex items-center gap-1">
-                  {popoConfig.token && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        handlePopoChange({ token: '' });
-                        void handleSavePopoConfig({ token: '' });
-                      }}
-                      className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                      title={i18nService.t('clear') || 'Clear'}
-                    >
-                      <XCircleIconSolid className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.token': !prev['popo.token'] }))}
-                    className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
-                    title={showSecrets['popo.token'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
-                  >
-                    {showSecrets['popo.token'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-            </div>
             )}
 
             {/* AES Key input */}
@@ -2900,12 +2900,191 @@ const IMSettings: React.FC = () => {
               )}
             </div>
 
-            {/* Advanced Settings (collapsible) */}
+            {/* Connectivity test */}
+            <div className="pt-1">
+              {renderConnectivityTestButton('popo')}
+            </div>
+
+            {/* Advanced Settings (collapsible) — credentials, connection mode, policies */}
             <details className="group">
               <summary className="cursor-pointer text-xs font-medium text-secondary hover:text-primary transition-colors">
                 {i18nService.t('imAdvancedSettings')}
               </summary>
               <div className="mt-2 space-y-3 pl-2 border-l-2 border-border-subtle">
+
+                {/* Connection Mode selector */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-secondary">
+                    {i18nService.t('imPopoConnectionMode')}
+                  </label>
+                  <select
+                    value={popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')}
+                    onChange={(e) => {
+                      const update = { connectionMode: e.target.value as PopoOpenClawConfig['connectionMode'] };
+                      handlePopoChange(update);
+                      void handleSavePopoConfig(update);
+                    }}
+                    className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 text-sm transition-colors"
+                  >
+                    <option value="websocket">{i18nService.t('imPopoConnectionModeWebsocket')}</option>
+                    <option value="webhook">{i18nService.t('imPopoConnectionModeWebhook')}</option>
+                  </select>
+                </div>
+
+                {/* Credential hint */}
+                <p className="text-xs text-secondary">
+                  {i18nService.t('imPopoCredentialHint')}
+                </p>
+
+                {/* AppKey input */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-secondary">AppKey</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={popoConfig.appKey}
+                      onChange={(e) => handlePopoChange({ appKey: e.target.value })}
+                      onBlur={() => void handleSavePopoConfig()}
+                      placeholder="AppKey"
+                      className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-8 text-sm transition-colors"
+                    />
+                    {popoConfig.appKey && (
+                      <div className="absolute right-2 inset-y-0 flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handlePopoChange({ appKey: '' });
+                            void handleSavePopoConfig({ appKey: '' });
+                          }}
+                          className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                          title={i18nService.t('clear') || 'Clear'}
+                        >
+                          <XCircleIconSolid className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* AppSecret input */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-secondary">AppSecret</label>
+                  <div className="relative">
+                    <input
+                      type={showSecrets['popo.appSecret'] ? 'text' : 'password'}
+                      value={popoConfig.appSecret}
+                      onChange={(e) => handlePopoChange({ appSecret: e.target.value })}
+                      onBlur={() => void handleSavePopoConfig()}
+                      placeholder="••••••••••••"
+                      className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
+                    />
+                    <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                      {popoConfig.appSecret && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handlePopoChange({ appSecret: '' });
+                            void handleSavePopoConfig({ appSecret: '' });
+                          }}
+                          className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                          title={i18nService.t('clear') || 'Clear'}
+                        >
+                          <XCircleIconSolid className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.appSecret': !prev['popo.appSecret'] }))}
+                        className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                        title={showSecrets['popo.appSecret'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                      >
+                        {showSecrets['popo.appSecret'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Token input (webhook mode only) */}
+                {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-secondary">Token</label>
+                  <div className="relative">
+                    <input
+                      type={showSecrets['popo.token'] ? 'text' : 'password'}
+                      value={popoConfig.token}
+                      onChange={(e) => handlePopoChange({ token: e.target.value })}
+                      onBlur={() => void handleSavePopoConfig()}
+                      placeholder="••••••••••••"
+                      className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
+                    />
+                    <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                      {popoConfig.token && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handlePopoChange({ token: '' });
+                            void handleSavePopoConfig({ token: '' });
+                          }}
+                          className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                          title={i18nService.t('clear') || 'Clear'}
+                        >
+                          <XCircleIconSolid className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.token': !prev['popo.token'] }))}
+                        className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                        title={showSecrets['popo.token'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                      >
+                        {showSecrets['popo.token'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                )}
+
+                {/* AES Key input */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-secondary">AES Key</label>
+                  <div className="relative">
+                    <input
+                      type={showSecrets['popo.aesKey'] ? 'text' : 'password'}
+                      value={popoConfig.aesKey}
+                      onChange={(e) => handlePopoChange({ aesKey: e.target.value })}
+                      onBlur={() => void handleSavePopoConfig()}
+                      placeholder="••••••••••••"
+                      className="block w-full rounded-lg bg-surface border-border-subtle border focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground px-3 py-2 pr-16 text-sm transition-colors"
+                    />
+                    <div className="absolute right-2 inset-y-0 flex items-center gap-1">
+                      {popoConfig.aesKey && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handlePopoChange({ aesKey: '' });
+                            void handleSavePopoConfig({ aesKey: '' });
+                          }}
+                          className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                          title={i18nService.t('clear') || 'Clear'}
+                        >
+                          <XCircleIconSolid className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowSecrets(prev => ({ ...prev, 'popo.aesKey': !prev['popo.aesKey'] }))}
+                        className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
+                        title={showSecrets['popo.aesKey'] ? (i18nService.t('hide') || 'Hide') : (i18nService.t('show') || 'Show')}
+                      >
+                        {showSecrets['popo.aesKey'] ? <EyeIcon className="h-4 w-4" /> : <EyeSlashIcon className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  {popoConfig.aesKey && popoConfig.aesKey.length !== 32 && (
+                    <p className="text-xs text-amber-500">AES Key {i18nService.t('lang') === 'zh' ? '需要为 32 个字符' : 'must be 32 characters'}（{i18nService.t('lang') === 'zh' ? '当前' : 'current'} {popoConfig.aesKey.length}）</p>
+                  )}
+                </div>
+
                 {/* Webhook fields (webhook mode only) */}
                 {(popoConfig.connectionMode || (popoConfig.token ? 'webhook' : 'websocket')) === 'webhook' && (
                 <>
@@ -3173,11 +3352,6 @@ const IMSettings: React.FC = () => {
                 </div>
               </div>
             </details>
-
-            {/* Connectivity test */}
-            <div className="pt-1">
-              {renderConnectivityTestButton('popo')}
-            </div>
 
             {/* Error display */}
             {status.popo?.lastError && (
