@@ -37,6 +37,9 @@ import Database from 'better-sqlite3';
 import type { CoworkRuntime } from '../libs/agentEngine/types';
 import type { CoworkStore } from '../coworkStore';
 import { classifyErrorKey } from '../../common/coworkErrorClassify';
+
+const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
+
 const CONNECTIVITY_TIMEOUT_MS = 10_000;
 const INBOUND_ACTIVITY_WARN_AFTER_MS = 2 * 60 * 1000;
 
@@ -2236,7 +2239,7 @@ export class IMGatewayManager extends EventEmitter {
     return {
       coworkSessionId: normalizedCoworkSessionId,
       candidateSessionKeys,
-      dingtalkSessionKeys: this.collectSessionKeysByChannel(sessions, 'dingtalk'),
+      dingtalkSessionKeys: this.collectSessionKeysByChannel(sessions, DINGTALK_OPENCLAW_CHANNEL),
       resolved: resolveOpenClawDeliveryRouteForSessionKeys(candidateSessionKeys, sessions)
         ?? resolveManagedSessionDeliveryRoute(normalizedCoworkSessionId, sessions),
     };
@@ -2363,7 +2366,7 @@ export class IMGatewayManager extends EventEmitter {
       return {
         sessionKey,
         route: {
-          channel: 'dingtalk',
+          channel: DINGTALK_OPENCLAW_CHANNEL,
           to,
           ...(accountId ? { accountId } : {}),
         },
